@@ -1,0 +1,210 @@
+from autumn.core.response.exception import HTTPException
+from autumn.core.routing.router import router
+from autumn.core.request.request import Request
+from autumn.core.middleware.manager import MiddlewareManager
+from autumn.core.dependencies.container import Container, RequestContext
+
+from typing import Callable
+from types import SimpleNamespace
+from colorama import Fore
+from enum import Enum
+
+import asyncio
+import time
+
+class Environment(str, Enum):
+    LOCAL = 'local'
+    DEVELOPMENT = 'development'
+    STAGING = 'staging'
+    PRODUCTION = 'production'
+
+class Autumn:
+    def __init__(self, *, environment: Environment = Environment.DEVELOPMENT):
+        self.environment: Environment = environment
+
+        self.router = router
+        
+        self.startup_hooks: list[Callable] = []
+        self.shutdown_hooks: list[Callable] = []
+        
+        self.middleware = MiddlewareManager()
+        self.container = Container()
+
+        self.__providers_synced: bool = False
+
+        if self.environment != Environment.PRODUCTION:
+            self.__enable_documentation()
+
+    def __enable_documentation(self) -> None:
+        from autumn.core.documentation.router import make_openapi_handler, docs_handler
+
+        self.router.add_route('GET', '/development/openapi.json', make_openapi_handler(self))
+        self.router.add_route('GET', '/development/documentation', docs_handler)
+
+    def __sync_providers(self):
+        if self.__providers_synced:
+            return
+        
+        from autumn.core.dependencies.registry import DEPENDENCY_FUNCTIONS
+
+        for func in DEPENDENCY_FUNCTIONS:
+            self.container.register_dependency_function(func)
+
+        self.__providers_synced = True
+
+    def startup(self, func: Callable) -> Callable:
+        self.startup_hooks.append(func)
+        
+        return func
+
+    def shutdown(self, func: Callable) -> Callable:
+        self.shutdown_hooks.append(func)
+        
+        return func
+
+    async def __lifespan(self, scope, receive, send):
+        if scope['type'] != 'lifespan':
+            return
+        
+        while True:
+            message = await receive()
+
+            if message['type'] == 'lifespan.startup':
+                try:
+                    start = time.perf_counter()
+
+                    self.__sync_providers()
+                    await asyncio.gather(*(hook() for hook in self.startup_hooks))
+
+                    duration = (time.perf_counter() - start) * 1000
+
+                    print(Fore.YELLOW + '[AUTUMN]' + Fore.RESET + ': ' + Fore.GREEN + f'Startup completed in {duration:.2f}ms' + Fore.RESET)
+
+                    await send({ 'type' : 'lifespan.startup.complete' })
+                
+                except Exception as error:
+                    await send({ 
+                        'type' : 'lifespan.startup.failed', 
+                        'message' : str(error) 
+                    })
+                    raise
+
+            elif message['type'] == 'lifespan.shutdown':
+                try:
+                    start = time.perf_counter()
+
+                    await asyncio.gather(*(hook() for hook in self.shutdown_hooks))
+
+                    duration = (time.perf_counter() - start) * 1000
+
+                    print(Fore.YELLOW + '[AUTUMN]' + Fore.RESET + ': ' + Fore.GREEN + f'Shutdown completed in {duration:.2f}ms' + Fore.RESET)
+
+                    await send({ 'type' : 'lifespan.shutdown.complete' })
+                
+                except Exception as error:
+                    await send({ 
+                        'type' : 'lifespan.shutdown.failed', 
+                        'message' : str(error) 
+                    })
+                    raise
+
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] == 'lifespan':
+            await self.__lifespan(scope, receive, send)
+            return
+		
+        if scope['type'] != 'http':
+            raise NotImplementedError(f'Unsupported scope type: {scope['type']}')
+
+        assert scope['type'] == 'http'
+
+        request = Request(scope, receive)
+        request.app = self
+        match = self.router.match(scope['method'], scope['path'])
+
+        try:
+            if match is None:
+                raise HTTPException(status_code = 404, details = f'Route {scope.get('path')} not found')
+        
+            handler, parameters = match
+            context = RequestContext()
+
+            if isinstance(handler, tuple) and (len(handler) == 2) and isinstance(handler[1], str):
+                controller_class, method_name = handler
+
+                async def endpoint(request: Request, **path_parameters):
+                    controller = await self.container.resolve(controller_class, context)
+                    method = getattr(controller, method_name)
+
+                    return await method(request, **path_parameters)
+                
+                original_method = getattr(controller_class, method_name)
+
+                for attribute in ('__query_parameters__', '__body_schema__', '__json_response__'):
+                    if hasattr(original_method, attribute):
+                        setattr(endpoint, attribute, getattr(original_method, attribute))
+                    
+                handler_callable = endpoint
+
+            else:
+                handler_callable = handler
+
+            wrapped_handler = await self.middleware.wrap(handler_callable, scope['path'], scope['method'])
+
+            query_meta = getattr(handler_callable, '__query_parameters__', [])
+
+            if query_meta:
+                raw_query = request.query.__dict__ if hasattr(request.query, '__dict__') else request.query
+                parsed = {}
+
+                for parameter in query_meta:
+                    name = parameter.get('name')
+                    cast = parameter.get('type')
+                    required = parameter.get('required')
+                    default = parameter.get('default')
+
+                    raw_value = raw_query.get(name)
+
+                    if raw_value is None:
+                        if required:
+                            raise HTTPException(400, details = f'Missing query parameter: \'{name}\'')
+                        
+                        elif default is not None:
+                            parsed[name] = default
+                        
+                        else:
+                            parsed[name] = None
+
+                    else:
+                        try:
+                            parsed[name] = cast(raw_value)
+
+                        except Exception:
+                            raise HTTPException(400, details = f'Invalid value for \'{name}\'')
+
+                request.query = SimpleNamespace(**parsed)
+
+            response = await wrapped_handler(request, **parameters)
+
+        except HTTPException as error:
+            response = error.response
+
+        except Exception as error:
+            response = HTTPException(500, details = str(error)).response
+            raise
+        
+        await send(
+            {
+                'type': 'http.response.start',
+                'status': response.status,
+                'headers': response.headers_as_list(),
+            }
+        )
+
+        await send(
+            {
+                'type': 'http.response.body', 
+                'body': response.body.encode('utf-8')
+            }
+        )
