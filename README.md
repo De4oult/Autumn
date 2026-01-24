@@ -10,10 +10,19 @@
 [+] @json_response
 [+] Auto injection 
 
-[] config collector
+[] Static
+[] Resources
 
-[] Swagger
+[] Class based returns
+- Private, Casted types
+- to json
+
+[+] OpenApi
+- [+] Builder
+- [+] Viewer
 [] Docstring Parser
+
+[] config collector
 
 [] repo by names
 [] ORM/Models
@@ -26,6 +35,7 @@
 
 
 [] cli
+- environment management
 - serve
 - config:create
 - service:create
@@ -45,6 +55,9 @@
 | database
 | | migrations
 | | seeders
+| static
+| | resources
+| | templates
 | logs/
 | app.py
 

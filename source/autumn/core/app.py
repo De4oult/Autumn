@@ -4,7 +4,7 @@ from autumn.core.request.request import Request
 from autumn.core.middleware.manager import MiddlewareManager
 from autumn.core.dependencies.container import Container, RequestContext
 
-from typing import Callable
+from typing import Callable, Optional
 from types import SimpleNamespace
 from colorama import Fore
 from enum import Enum
@@ -19,7 +19,10 @@ class Environment(str, Enum):
     PRODUCTION = 'production'
 
 class Autumn:
-    def __init__(self, *, environment: Environment = Environment.DEVELOPMENT):
+    def __init__(self, *, name: str = 'Autumn API', version: str = 'v0.1.0', description: Optional[str] = None, environment: Environment = Environment.DEVELOPMENT):
+        self.name: str = name
+        self.version: str = version
+        self.description: Optional[str] = description
         self.environment: Environment = environment
 
         self.router = router
@@ -36,10 +39,13 @@ class Autumn:
             self.__enable_documentation()
 
     def __enable_documentation(self) -> None:
-        from autumn.core.documentation.router import make_openapi_handler, docs_handler
+        from autumn.core.documentation.router import (
+            openapi_json_route, 
+            documentation_route
+        )
 
-        self.router.add_route('GET', '/development/openapi.json', make_openapi_handler(self))
-        self.router.add_route('GET', '/development/documentation', docs_handler)
+        self.router.add_route('GET', '/development/openapi.json', openapi_json_route(self))
+        self.router.add_route('GET', '/development/documentation', documentation_route)
 
     def __sync_providers(self):
         if self.__providers_synced:

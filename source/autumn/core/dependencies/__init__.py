@@ -3,12 +3,12 @@ from .container import (
 )
 
 from .decorators import (
-    dependency,
+    leaf,
     service
 )
 
 __all__ = (
     'Container',
-    'dependency',
+    'leaf',
     'service'
 )

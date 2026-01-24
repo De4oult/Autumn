@@ -11,14 +11,15 @@ def REST(prefix: str = ''):
         if not hasattr(__class, '__autumn_scope__'):
             setattr(__class, '__autumn_scope__', Scope.REQUEST)
 
-        for attribute_name in dir(__class):
-            method = getattr(__class, attribute_name)
+        if not hasattr(__class, '__tag__'):
+            setattr(__class, '__tag__', __class.__name__.removesuffix("Controller"))
 
-            if hasattr(method, '__routes__'):
-                for route in method.__routes__:
+        for name, attribute in __class.__dict__.items():
+            if hasattr(attribute, '__routes__'):
+                for route in attribute.__routes__:
                     full_path = prefix.rstrip('/') + route.get('path')
 
-                    router.add_route(route.get('method'), full_path, (__class, attribute_name))
+                    router.add_route(route.get('method'), full_path, (__class, name))
 
         return __class
     

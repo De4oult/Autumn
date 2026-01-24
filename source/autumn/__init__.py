@@ -19,8 +19,14 @@ from .core.routing import (
 )
 
 from .core.dependencies import (
-    dependency,
+    leaf,
     service
+)
+
+from .core.documentation import (
+    summary,
+    description,
+    tag
 )
 
 __all__ = (
@@ -38,6 +44,10 @@ __all__ = (
     REST, 
     get, post, put, patch, delete,
 
-    dependency,
-    service
+    leaf,
+    service,
+
+    summary,
+    description,
+    tag
 )

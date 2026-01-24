@@ -1,0 +1,35 @@
+[build-system]
+requires = ['hatchling>=1.21', 'hatch-vcs>=0.4']
+build-backend = 'hatchling.build'
+
+[project]
+name = 'Autumn'
+description = 'Modern web-framework'
+readme = 'README.md'
+requires-python = '>=3.12'
+dynamic = ['version']
+license = {text = 'MIT'}
+authors = [
+    {name = 'Timofei Dimitrov', email = 'kayra.dist@gmail.com'}
+]
+dependencies = [
+    'pydantic>=2.0',
+    'orjson',
+    'colorama',
+    'click',
+    'rich'
+]
+
+[project.optional-dependencies]
+dev = [
+    'pytest>=8',
+    'pytest-asyncio>=0.23',
+    'mypy>=1.10',
+]
+
+[tool.hatch.version]
+source = 'vcs'
+
+[tool.hatch.version.raw-options]
+tag_regex = '^(?:v)?(?P<version>\\d+\\.\\d+\\.\\d+.*)$'
+search_parent_directories = true

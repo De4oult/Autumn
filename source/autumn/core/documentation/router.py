@@ -1,38 +1,21 @@
-from __future__ import annotations
+from autumn.core.response import HTMLResponse, JSONResponse
+from autumn.core.documentation.openapi import OpenAPIGenerator
 
-from autumn.core.response import HTMLResponse, JSONResponse  # поправь импорты под свои классы
-from autumn.core.documentation.openapi import OpenAPIGenerator   # где у тебя лежит класс
+from pathlib import Path
 
-SWAGGER_HTML = """
-    <!doctype html>
-    <html>
-    <head>
-    <meta charset="utf-8" />
-    <title>Autumn Docs</title>
-    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
-    </head>
-    <body>
-    <div id="swagger-ui"></div>
-    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-    <script>
-        window.onload = () => {
-        SwaggerUIBundle({
-            url: '/development/openapi.json',
-            dom_id: '#swagger-ui'
-        });
-        };
-    </script>
-    </body>
-    </html>
-""".strip()
-
-def make_openapi_handler(app):
-    generator = OpenAPIGenerator(title="Autumn API", version="0.1.0")
+def openapi_json_route(app):
+    generator = OpenAPIGenerator(title = app.name, version = app.version)
 
     async def openapi_json(request):
         schema = generator.generate(app)
-        return JSONResponse(schema)  # если твой JSONResponse сам делает json.dumps
+        return JSONResponse(schema)
+    
     return openapi_json
 
-async def docs_handler(request):
-    return HTMLResponse(SWAGGER_HTML)
+async def documentation_route(request):
+    template_path: Path = Path(__file__).resolve().parents[2] / 'templates' / 'openapi.html'
+
+    return HTMLResponse(
+        template_path.read_text(encoding = 'utf-8'), 
+        status = 200
+    )

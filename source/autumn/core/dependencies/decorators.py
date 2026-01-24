@@ -17,7 +17,7 @@ def service(__cls: Optional[Type[T]] = None, *, scope: Scope = Scope.APP):
     
     return wrapper if __cls is None else wrapper(__cls)
 
-def dependency(_func: Optional[Callable[..., Any]] = None, *, scope: Scope = Scope.APP):
+def leaf(_func: Optional[Callable[..., Any]] = None, *, scope: Scope = Scope.APP):
     def wrapper(func: Callable[..., Any]) -> Callable[..., Any]:
         setattr(func, '__autumn_provider__', ('func', func))
         setattr(func, '__autumn_scope__', scope)

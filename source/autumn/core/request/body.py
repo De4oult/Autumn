@@ -6,6 +6,8 @@ from typing import get_origin, get_args, Type
 
 def body(schema: Type):
     def decorator(func):
+        setattr(func, '__body_schema__', schema)
+
         @wraps(func)
         async def wrapper(*args, **kwargs):
             request = next((arg for arg in args if hasattr(arg, 'json') and callable(arg.json)), None)
@@ -45,5 +47,8 @@ def body(schema: Type):
 
             return await func(*args, **kwargs, body = parsed_schema)
         
+        setattr(wrapper, '__body_schema__', schema)
+
         return wrapper
+
     return decorator

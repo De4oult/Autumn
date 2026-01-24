@@ -12,6 +12,7 @@ rich = "*"
 
 [dev-packages]
 uvicorn = "*"
+build = "*"
 
 [requires]
 python_version = "3.12"
