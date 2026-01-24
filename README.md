@@ -10,7 +10,18 @@
 [+] @json_response
 [+] Auto injection 
 
-[] Cors
+[] cli
+- [] environment management
+- serve
+- service:create
+- controller:create
+- config:create
+- repository:create
+
+[] Config Chain
+[] Config Classes
+[] Cors Config
+
 [] Static
 [] Resources
 
@@ -24,7 +35,6 @@
 [] Docstring Parser
 [] curl export/auto Postman
 
-[] config collector
 
 [] repo by names
 [] ORM/Models
@@ -33,14 +43,6 @@
 
 [] Auth
 [] WebSocket signaling
-
-[] cli
-- environment management
-- serve
-- service:create
-- controller:create
-- config:create
-- repository:create
 
 [] testing
 
