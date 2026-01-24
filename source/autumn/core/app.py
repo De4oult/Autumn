@@ -40,11 +40,15 @@ class Autumn:
 
     def __enable_documentation(self) -> None:
         from autumn.core.documentation.router import (
+            dependencies_json_route,
             openapi_json_route, 
+            dependencies_route,
             documentation_route
         )
 
+        self.router.add_route('GET', '/development/dependencies.json', dependencies_json_route(self))
         self.router.add_route('GET', '/development/openapi.json', openapi_json_route(self))
+        self.router.add_route('GET', '/development/dependencies', dependencies_route)
         self.router.add_route('GET', '/development/documentation', documentation_route)
 
     def __sync_providers(self):
@@ -198,7 +202,6 @@ class Autumn:
 
         except Exception as error:
             response = HTTPException(500, details = str(error)).response
-            raise
         
         await send(
             {

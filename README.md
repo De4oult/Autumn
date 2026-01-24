@@ -22,6 +22,7 @@
 - [+] Builder
 - [+] Viewer
 [] Docstring Parser
+[] curl export/auto Postman
 
 [] config collector
 
@@ -29,20 +30,26 @@
 [] ORM/Models
 
 [] Database/Cache/Logging/Queue providers
-[] curl export/auto Postman
 
 [] Auth
 [] WebSocket signaling
 
-
 [] cli
 - environment management
 - serve
-- config:create
 - service:create
 - controller:create
+- config:create
 - repository:create
 
+[] testing
+
+[] Rework exceptions screen
+- 1xx - 
+- 2xx - sunny autumn
+- 3xx - 
+- 4xx - yellow autumn/fog
+- 5xx - rain
 
 # Project
 | app/

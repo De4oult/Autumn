@@ -109,11 +109,11 @@ class OpenAPIGenerator:
         contoller_tag = getattr(controller_class, '__tag__', None) or controller_class.__name__.removesuffix('Controller')
 
         method_summary = self.__get_attribute_chain(method_object, '__summary__', None)
-        method_description    = self.__get_attribute_chain(method_object, '__description__', None)
+        method_description = self.__get_attribute_chain(method_object, '__description__', None)
         method_tags = self.__get_attribute_chain(method_object, '__tags__', []) or []
         operation_tags = [contoller_tag, *method_tags] if method_tags else [contoller_tag]
         
-        responses = self._build_responses(route, controller_class, method_name, method_object)
+        responses = self.__build_responses(route, controller_class, method_name, method_object)
 
         operation = {
             'operationId' : self.get_operation_id(controller_class, method_name, route.method.lower(), route.openapi_path),
@@ -226,7 +226,7 @@ class OpenAPIGenerator:
             if schema is not None:
                 responses['200'] = {
                     'description' : 'OK',
-                    'content'     : { 'application/json' : { 'schema': schema } },
+                    'content'     : { 'application/json' : { 'schema': schema } }
                 }
 
                 return responses
@@ -234,7 +234,7 @@ class OpenAPIGenerator:
         if returns is not inspect._empty and returns is JSONResponse:
             responses['200'] = {
                 'description' : 'OK',
-                'content'     : { 'application/json': { 'schema': { 'type' : 'object' } } },
+                'content'     : { 'application/json': { 'schema': { 'type' : 'object' } } }
             }
 
         return responses
@@ -265,7 +265,6 @@ class OpenAPIGenerator:
 
         try:
             tree = ast.parse(source)
-            print(tree)
 
         except SyntaxError:
             return set()
@@ -290,6 +289,7 @@ class OpenAPIGenerator:
 
         if isinstance(func, ast.Name):
             func_name = func.id
+
         elif isinstance(func, ast.Attribute):
             func_name = func.attr
 

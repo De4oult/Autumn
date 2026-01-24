@@ -1,5 +1,9 @@
-from importlib.metadata import version as _v
-__version__ = _v('Autumn')
+from importlib.metadata import PackageNotFoundError, version as __version
+
+try:
+    __version__ = __version('Autumn')
+except PackageNotFoundError:
+    __version__ = '0.1.0'
 
 from .core.app import Autumn
 from .core.request import (

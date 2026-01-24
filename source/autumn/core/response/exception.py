@@ -16,6 +16,7 @@ class HTTPException(Exception):
             403 : 'The path is blocked, but you knew it in advance',
             404 : 'There is no house or trace through the fog',
             408 : 'The answer did not come with the last light',
+            418 : 'I\'m Autumn, not Spring',
             429 : 'Autumn is not in a hurry, and you don\'t have to',
 
             500 : 'The forest did not respond — even the echo was silent',
