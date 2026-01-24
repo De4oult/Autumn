@@ -10,6 +10,7 @@
 [+] @json_response
 [+] Auto injection 
 
+[] Cors
 [] Static
 [] Resources
 

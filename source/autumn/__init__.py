@@ -1,3 +1,6 @@
+from importlib.metadata import version as _v
+__version__ = _v('Autumn')
+
 from .core.app import Autumn
 from .core.request import (
     Request, 
