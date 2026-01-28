@@ -1,5 +1,5 @@
-from autumn.core.routing.router import router
 from autumn.core.dependencies.scope import Scope
+from autumn.core.routing.router import router
 
 from typing import Callable
 
@@ -53,3 +53,10 @@ def patch(path: str) -> Callable:
 
 def delete(path: str) -> Callable:
     return route('DELETE', path)
+
+def websocket(path: str) -> Callable:
+    def decorator(func: Callable) -> Callable:
+        router.add_websocket_route(path, func) 
+        return func
+    
+    return decorator

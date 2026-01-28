@@ -1,20 +1,23 @@
 from __future__ import annotations
 
-import os
-import subprocess
-from pathlib import Path
-from typing import Optional
-
-import click
-from rich.console import Console
-
-from autumn.cli.environment.engine.models import EnvironmentConfig, EnvironmentType, PythonConfig, ApplicationConfig, ServerConfig, IndexesConfig
+from autumn.cli.environment.engine.models import EnvironmentConfig, EnvironmentType, PythonConfig, ApplicationConfig, ServerConfig, IndexesConfig, LockFile, LockGroup
 from autumn.cli.environment.engine.paths import AutumnPaths
-from autumn.cli.environment.engine.repositories import EnvironmentRepository, ActiveEnvironmentRepository
+from autumn.cli.environment.engine.repositories import EnvironmentRepository, ActiveEnvironmentRepository, LockRepository
 from autumn.cli.environment.engine.schema import SchemaExporter
 from autumn.cli.environment.engine.context import EnvironmentContextLoader
 from autumn.cli.environment.engine.doctor import DoctorService
 from autumn.cli.environment.engine.ui import UI
+from autumn.cli.environment.engine.lock import LockBuilder, _normalize_requested
+from autumn.cli.environment.engine.pip import RequirementsBuilder, PipIndexes
+from autumn.cli.environment.engine.frozen import build_frozen_requirements_file, FrozenLockError
+
+from pathlib import Path
+from typing import Optional, List
+from rich.console import Console
+
+import subprocess
+import click
+import os
 
 
 def __paths_from_env() -> AutumnPaths:
@@ -50,7 +53,7 @@ def env_list() -> None:
 @click.option(
     '--type', 
     'environment_type', 
-    type    = click.Choice([e.value for e in EnvironmentType]), 
+    type    = click.Choice([environment_type.value for environment_type in EnvironmentType]), 
     default = EnvironmentType.LOCAL.value
 )
 @click.option(
@@ -99,14 +102,14 @@ def env_create(name: str, environment_type: str, python_version: str, app_name: 
         plugins = {}
     )
 
-    repository.write(paths.env_json_path(name), config)
+    repository.write(paths.environment_json_path(name), config)
 
     SchemaExporter(paths.schemas_directory).export_environment_schema()
 
     Console().print(f'[green]Created[/green] {paths.environment_json_path(name)}')
 
 
-@click.command('use')
+@environment_group.command('use')
 @click.argument('name', type = str)
 def use_command(name: str) -> None:
     paths = __paths_from_env()
@@ -127,7 +130,7 @@ def use_command(name: str) -> None:
 def env_show(name: str, as_json: bool) -> None:
     paths = __paths_from_env()
 
-    repository = EnvironmentRepository(paths.environments_dir)
+    repository = EnvironmentRepository(paths.environments_directory)
     path = paths.environment_json_path(name)
     
     if not path.exists():
@@ -168,40 +171,94 @@ def env_show(name: str, as_json: bool) -> None:
     '--frozen', 
     is_flag = True, 
     default = False, 
-    help    = 'Strict mode (lock required). Not implemented yet in this initial step.'
+    help    = 'Strict mode: install exactly from lock and refuse drift.'
 )
 def install_command(environment_name: Optional[str], groups: str, frozen: bool) -> None:
-    if frozen:
-        raise click.ClickException('--frozen requires lock implementation (next step).')
-
     paths = __paths_from_env()
     loader = EnvironmentContextLoader(paths)
     resolved = loader.resolve_env_name(environment_name)
     context = loader.load(resolved)
 
-    ui = Console()
+    console = Console()
 
     for warning in context.dotenv.warnings:
-        ui.print(f'[yellow]WARNING[/yellow] {warning}')
+        console.print(f"[yellow]WARN[/yellow] {warning}")
 
-    requirements = loader.build_requirements(context.config, __split_groups(groups))
+    config = context.config
+    indexes = loader.build_indexes(config)
+    pip = loader.build_pip(context)
 
-    if not requirements:
-        ui.print('[yellow]WARNING[/yellow] No requirements to install for selected groups.')
+    selected_groups = __split_groups(groups)
+
+    if frozen:
+        lock_path = paths.lock_json_path(context.env_name)
+        lock_repo = LockRepository(lock_path)
+
+        if not lock_repo.exists():
+            raise click.ClickException(f'Lock file not found: {lock_path}. Run: autumn lock')
+
+        lock = lock_repo.read()
+
+        if lock.environment != context.env_name:
+            raise click.ClickException('Lock environment mismatch.')
+        
+        if lock.python != config.python.version:
+            raise click.ClickException(f'Python mismatch: env.json={config.python.version}, lock={lock.python}')
+
+        rb = RequirementsBuilder()
+
+        for group in selected_groups:
+            requested_now = sorted({_normalize_requested(r) for r in rb.build(config, [group]) if r})
+
+            if group not in lock.groups:
+                raise click.ClickException(f'Group \'{group}\' is missing in lock. Re-run: autumn lock --groups {group}')
+            
+            requested_lock = lock.groups[group].requested
+
+            if requested_now != requested_lock:
+                raise click.ClickException(f'Requested deps drift for group \'{group}\'. Re-run: autumn lock --groups {group}')
+
+        try:
+            req_file, pool_dir = build_frozen_requirements_file(
+                lock=lock,
+                paths=context.paths,
+                env_name=context.env_name,
+                groups=selected_groups,
+            )
+        except FrozenLockError as e:
+            raise click.ClickException(str(e))
+
+        console.print(f'Frozen install (no-index, require-hashes) into [bold]{context.env_name}[/bold] venv...')
+        console.print(f'Using artifacts from: {pool_dir}')
+        console.print(f'Using requirements: {req_file}')
+
+        pip.install_from_file(
+            requirements_file=req_file,
+            indexes=None,
+            require_hashes=True,
+            no_deps=True,
+            no_index=True,
+            find_links=[pool_dir],
+        )
+
+        console.print('[green]Done.[/green]')
         return
 
-    pip = loader.build_pip(context)
-    indexes = loader.build_indexes(context.config)
+    requirements = loader.build_requirements(config, selected_groups)
 
-    ui.print(f'Installing into [bold]{context.environment_name}[/bold] venv...')
-    
+    if not requirements:
+        console.print('[yellow]WARN[/yellow] No requirements to install for selected groups.')
+        return
+
+    console.print(f'Installing into [bold]{context.env_name}[/bold] venv...')
+
     pip.install(
         requirements, 
         indexes = indexes, 
         upgrade = False
     )
-    
-    ui.print('[green]Done.[/green]')
+
+    console.print('[green]Done.[/green]')
 
 
 @click.command('serve')
@@ -278,5 +335,72 @@ def doctor_command(environment_name: Optional[str]) -> None:
 
     service = DoctorService()
     issues = service.check(context)
-    
+
     UI(Console()).doctor(issues)
+
+
+@click.command('lock')
+@click.option(
+    '--environment', 
+    'environment_name', 
+    type    = str, 
+    default = None
+)
+@click.option(
+    '--groups', 
+    type    = str, 
+    default = '', 
+    help    = 'Comma-separated groups. Empty = all groups from env.json'
+)
+def lock_command(environment_name: Optional[str], groups: str) -> None:
+    paths = __paths_from_env()
+    loader = EnvironmentContextLoader(paths)
+    resolved = loader.resolve_env_name(environment_name)
+    context = loader.load(resolved)
+
+    console = Console()
+
+    for warning in context.dotenv.warnings:
+        console.print(f"[yellow]WARNING[/yellow] {warning}")
+
+    config = context.config
+    indexes = loader.build_indexes(config)
+    pip = loader.build_pip(context)
+
+    target_groups = __split_groups(groups) if groups.strip() else sorted(config.dependencies.keys())
+
+    lock_repo = LockRepository(paths.lock_json_path(context.env_name))
+
+    if lock_repo.exists():
+        lock = lock_repo.read()
+        lock.environment = context.env_name
+        lock.python = config.python.version
+        lock.indexes = config.indexes
+
+    else:
+        lock = LockFile(
+            environment = context.env_name,
+            python      = config.python.version,
+            indexes     = config.indexes,
+            groups      = {}
+        )
+
+    builder = LockBuilder(RequirementsBuilder())
+    updates = {}
+
+    console.print(f'Locking env [bold]{context.env_name}[/bold] groups: {', '.join(target_groups)}')
+
+    for group in target_groups:
+        updates[group] = builder.build_group_lock(
+            config,
+            group,
+            indexes=indexes,
+            paths=context.paths,
+            env_name=context.env_name,
+            python_version=config.python.version,
+        )
+
+    lock = builder.merge_groups(lock, updates)
+    lock_repo.write(lock)
+
+    console.print(f'[green]Wrote lock:[/green] {paths.lock_json_path(context.env_name)}')

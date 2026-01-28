@@ -1,7 +1,7 @@
 from typing import Any, Optional
 from types import SimpleNamespace
-from orjson import loads
 from urllib.parse import parse_qs
+from orjson import loads
 
 class Request:
     def __init__(self, scope: dict, receive: Any):
@@ -15,7 +15,7 @@ class Request:
         
         self.headers = self.__parse_headers(scope.get('headers', []))
 
-        self._query_raw = self._parse_query()
+        self._query_raw = self.__parse_query()
         self.query = SimpleNamespace(**self._query_raw)
 
         self.__body: Optional[bytes] = None
@@ -26,7 +26,7 @@ class Request:
             for key, value in raw_headers
         }
     
-    def _parse_query(self) -> dict:
+    def __parse_query(self) -> dict:
         raw = self.scope.get('query_string', b'').decode('utf-8')
         parsed = parse_qs(raw)
 

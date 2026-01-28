@@ -1,4 +1,4 @@
-# from autumn.cli.environment.commands import
+from autumn.cli.environment.commands import environment_group, use_command, install_command, serve_command, doctor_command, lock_command
 
 from rich.console import Console
 
@@ -19,8 +19,6 @@ class CLI:
     def error(self, message: str) -> None:
         self.console.print(f'[red]ERROR[/red]: {message}')
 
-context = click.make_pass_decorator(CLI, ensure = True)
-
 @click.group(context_settings = { 'help_option_names' : ['-h', '--help'] })
 @click.option(
     '--root', 
@@ -31,15 +29,41 @@ context = click.make_pass_decorator(CLI, ensure = True)
     ),
     default = '.'
 )
-@context
-def autumn(app: CLI, root: str) -> None:
+@click.pass_context
+def autumn(context: click.Context, root: str) -> None:
+    context.ensure_object(CLI)
+
     os.environ['AUTUMN_PROJECT_ROOT'] = os.path.abspath(root)
 
 
+autumn.add_command(
+    environment_group, 
+    name = 'env'
+)
+autumn.add_command(
+    use_command, 
+    name = 'use'
+)
+autumn.add_command(
+    install_command, 
+    name = 'install'
+)
+autumn.add_command(
+    serve_command, 
+    name = 'serve'
+)
+autumn.add_command(
+    doctor_command, 
+    name = 'doctor'
+)
+autumn.add_command(
+    lock_command, 
+    name = 'lock'
+)
+
 def main() -> None:
     try:
-        autumn(prog_name = 'autumn')
-
+        autumn.main(prog_name="autumn")
     except Exception as error:
-        Console().print(f'[red]ERROR[/red]: {error}')
+        Console().print(f"[red]ERROR[/red]: {error}")
         sys.exit(1)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union, Annotated
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -35,7 +35,7 @@ class ServerConfig(BaseModel):
     workers: int = 1
 
 
-# ---- Dependency specs ----
+
 class VersionDependency(BaseModel):
     type: Literal['version'] = 'version'
     version: str = Field(..., description = 'PEP 440 spec, e.g. >=1,<2')
@@ -59,8 +59,11 @@ class PathDependency(BaseModel):
     editable: bool = False
     extras: List[str] = Field(default_factory = list)
 
-
-DependencySpec = Union[str, VersionDependency, GitDependency, UrlDependency, PathDependency]
+StructuredDependencySpec = Annotated[
+    Union[VersionDependency, GitDependency, UrlDependency, PathDependency],
+    Field(discriminator = 'type')
+]
+DependencySpec = Union[str, StructuredDependencySpec]
 DependencyGroups = Dict[str, Dict[str, DependencySpec]]
 
 class EnvironmentConfig(BaseModel):
@@ -99,3 +102,39 @@ class EnvironmentConfig(BaseModel):
         value.setdefault('dev', {})
         
         return value
+
+class LockGroup(BaseModel):
+    requested: List[str] = Field(default_factory = list)
+    resolved: List[LockedRequirement] = Field(default_factory = list)
+
+class LockFile(BaseModel):
+    lock_version: int = 1
+    environment: str
+    python: str
+    indexes: IndexesConfig
+    groups: Dict[str, LockGroup] = Field(default_factory = dict)
+
+class PackageSource(BaseModel):
+    type: Literal['pypi', 'url', 'git', 'path', 'unknown'] = 'unknown'
+    url: Optional[str] = None
+    ref: Optional[str] = None
+    commit_id: Optional[str] = None
+    path: Optional[str] = None
+    subdirectory: Optional[str] = None
+
+
+class Artifact(BaseModel):
+    filename: str
+    sha256: str
+    size: int
+    local_path: str
+    url: Optional[str] = None
+
+
+class LockedRequirement(BaseModel):
+    name: str
+    version: str
+    raw: Optional[str] = None
+    editable: bool = False
+    source: PackageSource = Field(default_factory=PackageSource)
+    artifacts: List[Artifact] = Field(default_factory=list)

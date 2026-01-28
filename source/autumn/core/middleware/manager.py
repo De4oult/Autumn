@@ -55,24 +55,15 @@ class MiddlewareManager:
         
         return True
 
-    async def wrap(self, handler: Callable[..., Awaitable[Response]], path: str, method: str) -> Callable[[Request], Awaitable[Response]]:
-        async def wrapped(*args, **kwargs):
-            request = kwargs.pop('request', None)
-
-            if (not request) and args and isinstance(args[0], Request):
-                request = args[0]
-
-            if request is None:
-                raise RuntimeError('Request not found in middleware context')
-
-            async def final_handler(__request: Request):
-                if args and isinstance(args[0], Request):
-                    return await handler(*args, **kwargs)
-                else:
-                    return await handler(*args, request = __request, **kwargs)
-
+    async def wrap(
+        self,
+        invoke: Callable[[Request], Awaitable[Response]], 
+        path: str, 
+        method: str
+    ) -> Callable[[Request], Awaitable[Response]]:
+        async def wrapped(request: Request) -> Response:
             # before
-            call_next = final_handler
+            call_next = invoke
             
             for middleware_function, middleware_path, middleware_method in reversed(self.before_middlewares):
                 if self.__match(request, middleware_path, middleware_method):
@@ -84,7 +75,7 @@ class MiddlewareManager:
             for middleware_function, middleware_path, middleware_method in self.after_middlewares:
                 if self.__match(request, middleware_path, middleware_method):
                     async def call_next(_: Request) -> Response:
-                        return await self.__return_response(response)
+                        return response
                 
                     response = await middleware_function(request, call_next)
 
@@ -92,9 +83,6 @@ class MiddlewareManager:
 
         return wrapped
     
-    async def __return_response(self, response: Response) -> Response:
-        return response
-
     def __wrap_before_middleware(self, middleware: MiddlewareFunc, next_call: Callable[[Request], Awaitable[Response]]) -> Callable[[Request], Awaitable[Response]]:
         async def wrapped(req: Request):
             return await middleware(req, next_call)

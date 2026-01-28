@@ -14,7 +14,7 @@ class DotenvResult:
     warnings: List[str]
 
 class DotenvLoader:
-    _line_re = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$')
+    _line_re = re.compile(r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$')
 
     def load_and_inject(self, env_file: Path, fallback_file: Path) -> DotenvResult:
         warnings: List[str] = []
@@ -36,7 +36,8 @@ class DotenvLoader:
                 warnings = warnings
             )
 
-        loaded = self.__parse(used)
+        loaded, parse_warnings = self.__parse(used)
+        warnings.extend(parse_warnings)
 
         for key, value in loaded.items():
             if key not in os.environ:
@@ -48,26 +49,42 @@ class DotenvLoader:
             warnings = warnings
         )
 
-    def __parse(self, path: Path) -> Dict[str, str]:
+    def __strip_inline_comment(self, value: str) -> str:
+        # срезаем комментарий только если не внутри кавычек
+        in_s = False
+        in_d = False
+        out = []
+        for ch in value:
+            if ch == "'" and not in_d:
+                in_s = not in_s
+            elif ch == '"' and not in_s:
+                in_d = not in_d
+            if ch == '#' and not in_s and not in_d:
+                break
+            out.append(ch)
+        return "".join(out).rstrip()
+
+    def __parse(self, path: Path) -> tuple[Dict[str, str], List[str]]:
         out: Dict[str, str] = {}
+        warnings: List[str] = []
 
-        for raw in path.read_text(encoding = 'utf-8').splitlines():
+        for idx, raw in enumerate(path.read_text(encoding='utf-8').splitlines(), start=1):
             line = raw.strip()
-
             if not line or line.startswith('#'):
                 continue
-            
-            match = self._line_re.match(raw)
 
+            match = self._line_re.match(raw)
             if not match:
+                warnings.append(f'{path.name}:{idx}: cannot parse line: {raw!r}')
                 continue
 
             key = match.group(1)
             value = match.group(2).strip()
+            value = self.__strip_inline_comment(value).strip()
 
-            if (value.startswith('\'') and value.endswith('\'')) or (value.startswith('\'') and value.endswith('\'')):
+            if (value.startswith("'") and value.endswith("'")) or (value.startswith('"') and value.endswith('"')):
                 value = value[1:-1]
 
             out[key] = value
-            
-        return out
+
+        return out, warnings

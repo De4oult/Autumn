@@ -13,13 +13,19 @@ def body(schema: Type):
             request = next((arg for arg in args if hasattr(arg, 'json') and callable(arg.json)), None)
 
             if request is None:
-                raise HTTPException(500, details = 'Request object not found')
+                raise HTTPException(
+                    status = 500, 
+                    details = 'Request object not found'
+                )
             
             try:
                 raw = await request.body()
 
                 if not raw or raw.strip() in (b'', b'null'):
-                    raise HTTPException(400, details = 'Request body is empty')
+                    raise HTTPException(
+                        status = 400, 
+                        details = 'Request body is empty'
+                    )
 
                 json_data = await request.json()
             
@@ -29,7 +35,10 @@ def body(schema: Type):
                     inner_type = get_args(schema)[0]
 
                     if not issubclass(inner_type, BaseModel):
-                        raise HTTPException(500, details = 'Invalid schema inside list')
+                        raise HTTPException(
+                            status = 500, 
+                            details = 'Invalid schema inside list'
+                        )
                     
                     parsed_schema = [inner_type(**item) for item in json_data]
 
@@ -40,10 +49,16 @@ def body(schema: Type):
                 raise
 
             except Exception as error:
-                raise HTTPException(400, details = f'Invalid request body: {str(error)}')
+                raise HTTPException(
+                    status = 400, 
+                    details = f'Invalid request body: {str(error)}'
+                )
             
             if 'body' in kwargs:
-                raise HTTPException(500, details = 'Parameter \'body\' already exists')
+                raise HTTPException(
+                    status = 500, 
+                    details = 'Parameter \'body\' already exists'
+                )
 
             return await func(*args, **kwargs, body = parsed_schema)
         

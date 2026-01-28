@@ -22,7 +22,8 @@ from .core.response import (
 )
 from .core.routing import (
     REST, 
-    get, post, put, patch, delete
+    get, post, put, patch, delete, 
+    websocket
 )
 
 from .core.dependencies import (
@@ -48,12 +49,17 @@ __all__ = (
     'XMLResponse', 
     'HTTPException',
     json_response,
+
+    # Routing
     REST, 
     get, post, put, patch, delete,
+    websocket,
 
+    # Dependency Injection
     leaf,
     service,
 
+    # Documentation
     summary,
     description,
     tag

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from autumn.cli.environment.engine.models import EnvironmentConfig
+from autumn.cli.environment.engine.models import EnvironmentConfig, LockFile
+
 from pathlib import Path
 from typing import List, Optional
 
@@ -50,3 +51,26 @@ class ActiveEnvironmentRepository:
     def set(self, env_name: str) -> None:
         self.active_env_file.parent.mkdir(parents = True, exist_ok = True)
         self.active_env_file.write_text(env_name, encoding = 'utf-8')
+
+class LockRepository:
+    def __init__(self, lock_path: Path) -> None:
+        self.lock_path = lock_path
+
+    def exists(self) -> bool:
+        return self.lock_path.exists()
+
+    def read(self) -> LockFile:
+        data = json.loads(self.lock_path.read_text(encoding = 'utf-8'))
+
+        return LockFile.model_validate(data)
+
+    def write(self, lock: LockFile) -> None:
+        self.lock_path.parent.mkdir(parents = True, exist_ok = True)
+        
+        self.lock_path.write_text(
+            lock.model_dump_json(
+                indent = 4, 
+                exclude_none = True
+            ),
+            encoding = 'utf-8'
+        )

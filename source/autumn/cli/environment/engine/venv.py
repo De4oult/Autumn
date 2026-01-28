@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import subprocess
+import shutil
 import venv
+import os
 
 @dataclass(frozen = True)
 class PythonVersion:
@@ -35,30 +37,19 @@ class VenvManager:
 
     def remove(self) -> None:
         if self.venv_directory.exists():
-            for path in sorted(self.venv_directory.rglob('*'), reverse = True):
-                if path.is_file():
-                    try:
-                        path.unlink()
+            shutil.rmtree(self.venv_directory, ignore_errors=True)
 
-                    except OSError:
-                        pass
-                else:
-                    try:
-                        path.rmdir()
-                    except OSError:
-                        pass
-
-            try:
-                self.venv_directory.rmdir()
-
-            except OSError:
-                pass
+    def _bin_dir(self) -> str:
+        return "Scripts" if os.name == "nt" else "bin"
 
     def python_exe(self) -> Path:
-        return self.venv_directory / 'Scripts' / 'python.exe'
+        exe = "python.exe" if os.name == "nt" else "python"
+        return self.venv_directory / self._bin_dir() / exe
 
     def pip_exe(self) -> Path:
-        return self.venv_directory / 'Scripts' / 'pip.exe'
+        exe = "pip.exe" if os.name == "nt" else "pip"
+        return self.venv_directory / self._bin_dir() / exe
+
 
     def assert_python_version(self, expected: PythonVersion) -> None:
         python = self.python_exe()

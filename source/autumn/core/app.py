@@ -1,8 +1,12 @@
-from autumn.core.response.exception import HTTPException
-from autumn.core.routing.router import router
-from autumn.core.request.request import Request
+from autumn.core.websocket.websocket import WebSocket, WebSocketDisconnect
+from autumn.core.dependencies.container import Container, ExecutionContext
+from autumn.core.configuration.configuration import get_registered_configs
 from autumn.core.middleware.manager import MiddlewareManager
-from autumn.core.dependencies.container import Container, RequestContext
+from autumn.core.response.exception import HTTPException
+from autumn.core.response.response import Response
+from autumn.core.dependencies.scope import Scope
+from autumn.core.request.request import Request
+from autumn.core.routing.router import router
 
 from typing import Callable, Optional
 from types import SimpleNamespace
@@ -46,10 +50,14 @@ class Autumn:
             documentation_route
         )
 
-        self.router.add_route('GET', '/development/dependencies.json', dependencies_json_route(self))
-        self.router.add_route('GET', '/development/openapi.json', openapi_json_route(self))
-        self.router.add_route('GET', '/development/dependencies', dependencies_route)
-        self.router.add_route('GET', '/development/documentation', documentation_route)
+        self.router.add_route('GET', '/autumn/documentation/dependencies.json', dependencies_json_route(self))
+        self.router.add_route('GET', '/autumn/documentation/openapi.json', openapi_json_route(self))
+
+
+        self.router.add_route('GET', '/autumn/web', documentation_route)
+
+        self.router.add_route('GET', '/autumn/dependencies', dependencies_route)
+        self.router.add_route('GET', '/autumn/documentation', documentation_route)
 
     def __sync_providers(self):
         if self.__providers_synced:
@@ -59,6 +67,15 @@ class Autumn:
 
         for func in DEPENDENCY_FUNCTIONS:
             self.container.register_dependency_function(func)
+
+        for configuration_class in get_registered_configs():
+            configuration = configuration_class.build()
+
+            self.container.register_value(
+                configuration_class, 
+                configuration, 
+                scope = Scope.APP
+            )
 
         self.__providers_synced = True
 
@@ -124,6 +141,66 @@ class Autumn:
             await self.__lifespan(scope, receive, send)
             return
 		
+        if scope['type'] == 'websocket':
+            websocket: WebSocket = WebSocket(scope, receive, send)
+
+            match = self.router.match_websocket(scope['path'])
+
+            try:
+                if match is None:
+                    await websocket.close(code = 1000)
+                    return
+                
+                handler, parameters = match
+
+                context = ExecutionContext()
+                context.values[WebSocket] = websocket
+
+                if isinstance(handler, tuple) and (len(handler) == 2) and isinstance(handler[1], str):
+                    controller_class, method_name = handler
+
+                    async def endpoint(websocket: WebSocket, **path_parameters):
+                        controller = await self.container.resolve(controller_class, context)
+                        method = getattr(controller, method_name)
+
+                        return await self.container.call(
+                            method,
+                            context         = context,
+                            provided_kwargs = {
+                                **path_parameters,
+                                'websocket': websocket
+                            }
+                        )
+                                        
+                    handler_callable = endpoint
+
+                else:
+                    handler_callable = handler
+
+                await self.container.call(
+                    handler_callable,
+                    context         = context,
+                    provided_kwargs = { 
+                        **parameters,
+                        'websocket': websocket 
+                    }
+                )
+            
+            except WebSocketDisconnect:
+                return
+            
+            except Exception as error:
+                print(error)
+                try:
+                    await websocket.close(code = 1011)
+
+                except Exception:
+                    pass
+                
+                return
+
+            return
+
         if scope['type'] != 'http':
             raise NotImplementedError(f'Unsupported scope type: {scope['type']}')
 
@@ -135,10 +212,15 @@ class Autumn:
 
         try:
             if match is None:
-                raise HTTPException(status_code = 404, details = f'Route {scope.get('path')} not found')
+                raise HTTPException(
+                    status = 404, 
+                    details = f'Route {scope.get('path')} not found'
+                )
         
             handler, parameters = match
-            context = RequestContext()
+
+            context = ExecutionContext()
+            context.values[Request] = request
 
             if isinstance(handler, tuple) and (len(handler) == 2) and isinstance(handler[1], str):
                 controller_class, method_name = handler
@@ -147,7 +229,14 @@ class Autumn:
                     controller = await self.container.resolve(controller_class, context)
                     method = getattr(controller, method_name)
 
-                    return await method(request, **path_parameters)
+                    return await self.container.call(
+                        method,
+                        context         = context,
+                        provided_kwargs = {
+                            **path_parameters,
+                            'request': request
+                        }
+                    )
                 
                 original_method = getattr(controller_class, method_name)
 
@@ -160,7 +249,22 @@ class Autumn:
             else:
                 handler_callable = handler
 
-            wrapped_handler = await self.middleware.wrap(handler_callable, scope['path'], scope['method'])
+
+            async def invoke(request: Request) -> Response:
+                return await self.container.call(
+                    handler_callable,
+                    context         = context,
+                    provided_kwargs = {
+                        **parameters,
+                        'request': request
+                    }
+                )
+            
+            wrapped_handler = await self.middleware.wrap(
+                invoke, 
+                scope['path'], 
+                scope['method']
+            )
 
             query_meta = getattr(handler_callable, '__query_parameters__', [])
 
@@ -178,7 +282,10 @@ class Autumn:
 
                     if raw_value is None:
                         if required:
-                            raise HTTPException(400, details = f'Missing query parameter: \'{name}\'')
+                            raise HTTPException(
+                                status = 400, 
+                                details = f'Missing query parameter: \'{name}\''
+                            )
                         
                         elif default is not None:
                             parsed[name] = default
@@ -191,29 +298,48 @@ class Autumn:
                             parsed[name] = cast(raw_value)
 
                         except Exception:
-                            raise HTTPException(400, details = f'Invalid value for \'{name}\'')
+                            raise HTTPException(
+                                status = 400, 
+                                details = f'Invalid value for \'{name}\''
+                            )
 
                 request.query = SimpleNamespace(**parsed)
 
-            response = await wrapped_handler(request, **parameters)
+            response = await wrapped_handler(request)
 
         except HTTPException as error:
             response = error.response
 
         except Exception as error:
-            response = HTTPException(500, details = str(error)).response
+            print(error)
+            response = HTTPException(
+                status = 500, 
+                details = str(error)
+            ).response
         
-        await send(
-            {
-                'type': 'http.response.start',
-                'status': response.status,
-                'headers': response.headers_as_list(),
-            }
-        )
+        await send({
+            'type'    : 'http.response.start',
+            'status'  : response.status,
+            'headers' : response.headers_as_list(),
+        })
 
-        await send(
-            {
-                'type': 'http.response.body', 
-                'body': response.body.encode('utf-8')
-            }
-        )
+        if hasattr(response, 'body_iterate') and callable(getattr(response, 'body_iterate')):
+            async for chunk in response.body_iterate():
+                await send({
+                    'type'      : 'http.response.body',
+                    'body'      : chunk,
+                    'more_body' : True
+                })
+            
+            await send({
+                'type'      : 'http.response.body',
+                'body'      : b'',
+                'more_body' : False
+            })
+            return
+
+        await send({
+            'type'      : 'http.response.body', 
+            'body'      : response.body.encode('utf-8') if isinstance(response.body, str) else response.body,
+            'more_body' : False
+        })

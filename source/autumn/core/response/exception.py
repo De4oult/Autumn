@@ -2,7 +2,7 @@ from autumn.core.response import HTMLResponse
 from pathlib import Path
 
 class HTTPException(Exception):    
-    def __init__(self, status_code: int = 500, title: str | None = None, details: str = None):
+    def __init__(self, status: int = 500, title: str | None = None, details: str = None):
         titles: dict[int, str] = {
             # 200 : 'You\'re still here, and the leaves are whispering yes',
             # 201 : 'Something new was born in this silence',
@@ -25,8 +25,8 @@ class HTTPException(Exception):
             504 : 'The expectation disappeared into the damp air'
         }
 
-        self.status_code = status_code
-        self.title = title if title else titles.get(status_code, 'Something')
+        self.status = status
+        self.title = title if title else titles.get(self.status, 'Something')
         self.details = details or ''
         
         self.response = self.__render_response()
@@ -36,9 +36,9 @@ class HTTPException(Exception):
         error_template = template_path.read_text(encoding = 'utf-8')
 
         html = error_template.format(
-            status_code = self.status_code,
+            status = self.status,
             title = self.title,
             details = self.details
         )
 
-        return HTMLResponse(html, status = self.status_code)
+        return HTMLResponse(html, status = self.status)

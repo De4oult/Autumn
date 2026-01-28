@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import List
 
-from .context import EnvironmentContext
-from .paths import AutumnPaths
+from autumn.cli.environment.engine.context import EnvironmentContext
 
 
 @dataclass
@@ -20,7 +18,7 @@ class DoctorService:
 
         issues.append(DoctorIssue('OK', f'Environment: {context.env_name} ({context.config.type})'))
 
-        env_json = context.paths.env_json_path(context.env_name)
+        env_json = context.paths.environment_json_path(context.env_name)
         issues.append(DoctorIssue('OK' if env_json.exists() else 'ERROR', f'Config file: {env_json}'))
 
         venv_python = context.venv.python_exe()
