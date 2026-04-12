@@ -3,7 +3,9 @@ from .response import (
     JSONResponse, 
     RedirectResponse,
     HTMLResponse, 
-    XMLResponse
+    XMLResponse,
+    FileResponse,
+    StreamFileResponse
 )
 from .exception import HTTPException
 from .decorators import json_response
@@ -14,6 +16,8 @@ __all__ = (
     'RedirectResponse',
     'HTMLResponse', 
     'XMLResponse',
+    'FileResponse',
+    'StreamFileResponse',
     'HTTPException',
     json_response
 )

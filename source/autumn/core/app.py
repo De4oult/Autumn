@@ -44,17 +44,31 @@ class Autumn:
 
     def __enable_documentation(self) -> None:
         from autumn.core.documentation.router import (
+            favicon_route,
+            services_json_route,
             dependencies_json_route,
             openapi_json_route, 
             dependencies_route,
             documentation_route
         )
 
+        self.router.add_route('GET', '/favicon', favicon_route)
+
+        self.router.add_route('GET', '/documentation/services.json', services_json_route(self))
+        self.router.add_route('GET', '/documentation/dependencies.json', dependencies_json_route(self))
+        self.router.add_route('GET', '/documentation/openapi.json', openapi_json_route(self))
+
+        self.router.add_route('GET', '/development/services.json', services_json_route(self))
+        self.router.add_route('GET', '/development/openapi.json', openapi_json_route(self))
+
+        self.router.add_route('GET', '/autumn/documentation/services.json', services_json_route(self))
         self.router.add_route('GET', '/autumn/documentation/dependencies.json', dependencies_json_route(self))
         self.router.add_route('GET', '/autumn/documentation/openapi.json', openapi_json_route(self))
 
+        self.router.add_route('GET', '/autumn/development/services.json', services_json_route(self))
+        self.router.add_route('GET', '/autumn/development/openapi.json', openapi_json_route(self))
 
-        self.router.add_route('GET', '/autumn/web', documentation_route)
+        self.router.add_route('GET', '/autumn', documentation_route)
 
         self.router.add_route('GET', '/autumn/dependencies', dependencies_route)
         self.router.add_route('GET', '/autumn/documentation', documentation_route)

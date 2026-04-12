@@ -1,15 +1,17 @@
 import ast
 import inspect
 from typing import Callable, Any, Dict, List, Optional, Type
+from uuid import UUID
 
 from autumn.core.response.response import JSONResponse
-from pydantic import BaseModel
+from pydantic import TypeAdapter
 
 PYTYPE_TO_SCHEMA = {
     int:   { 'type' : 'integer' },
     str:   { 'type' : 'string'  },
     float: { 'type' : 'number'  },
-    bool:  { 'type' : 'boolean' }
+    bool:  { 'type' : 'boolean' },
+    UUID:  { 'type' : 'string', 'format': 'uuid' }
 }
 
 TYPENAME_TO_SCHEMA = {
@@ -19,6 +21,19 @@ TYPENAME_TO_SCHEMA = {
     'bool'  : { 'type' : 'boolean' },
     'uuid'  : { 'type' : 'string', 'format': 'uuid' }
 }
+
+
+def _doc_parts(obj: Any) -> tuple[Optional[str], Optional[str]]:
+    doc = inspect.getdoc(obj) or ''
+
+    if not doc.strip():
+        return None, None
+
+    lines = doc.splitlines()
+    summary = (lines[0].strip() if lines else None) or None
+    body = '\n'.join(lines[1:]).strip() or None
+
+    return summary, body
 
 class OpenAPIGenerator:
     def __init__(
@@ -60,7 +75,8 @@ class OpenAPIGenerator:
 
             if tag not in seen:
                 seen.add(tag)
-                description = getattr(controller_class, '__description__', None)
+                _, doc_body = _doc_parts(controller_class)
+                description = getattr(controller_class, '__description__', None) or doc_body
 
                 tags.append({
                     'name': tag, 
@@ -107,6 +123,7 @@ class OpenAPIGenerator:
 
         request_body = self.__build_request_body(method_object)
         contoller_tag = getattr(controller_class, '__tag__', None) or controller_class.__name__.removesuffix('Controller')
+        doc_summary, doc_description = _doc_parts(method_object)
 
         method_summary = self.__get_attribute_chain(method_object, '__summary__', None)
         method_description = self.__get_attribute_chain(method_object, '__description__', None)
@@ -119,18 +136,22 @@ class OpenAPIGenerator:
             'operationId' : self.get_operation_id(controller_class, method_name, route.method.lower(), route.openapi_path),
             'parameters'  : parameters,
             'responses'   : responses,
-            'summary'     : method_summary or method_name,
-            'description' : method_description or None,
+            'summary'     : method_summary or doc_summary or method_name,
+            'description' : method_description or doc_description or None,
             'tags'        : operation_tags
         }
+
+        if any(str(tag).strip().lower() in ('deprecated', 'depricated') for tag in operation_tags):
+            operation['deprecated'] = True
 
         if request_body is not None:
             operation['requestBody'] = request_body
 
         if method_description:
             operation['description'] = method_description
-
-        if operation['description'] is None:
+        elif doc_description:
+            operation['description'] = doc_description
+        else:
             operation.pop('description')
 
         return operation
@@ -182,19 +203,19 @@ class OpenAPIGenerator:
         if body_model is None:
             return None
 
-        if inspect.isclass(body_model) and issubclass(body_model, BaseModel):
-            return {
-                'required' : True,
-                'content'  : {
-                    'application/json' : {
-                        'schema': body_model.model_json_schema()
-                    }
+        schema = self.__schema_for_annotation(body_model)
+
+        if schema is None:
+            return None
+
+        return {
+            'required' : True,
+            'content'  : {
+                'application/json' : {
+                    'schema': schema
                 }
             }
-
-        # add later special response classes
-
-        return None
+        }
 
     def __build_responses(self, route, controller_class: Type[Any], method_name: str, method_object: Any) -> dict:
         responses: Dict[str, Any] = {}
@@ -217,11 +238,7 @@ class OpenAPIGenerator:
             responses.setdefault(str(code), { 'description': f'HTTP {code}' })
 
         if is_json_response:
-            if response_model and inspect.isclass(response_model) and issubclass(response_model, BaseModel):
-                schema = response_model.model_json_schema()
-
-            else:
-                schema = self.__infer_json_response_schema(method_object)
+            schema = self.__schema_for_annotation(response_model) if response_model is not None else self.__infer_json_response_schema(method_object)
 
             if schema is not None:
                 responses['200'] = {
@@ -250,10 +267,17 @@ class OpenAPIGenerator:
         if returns is inspect._empty:
             return None
 
-        if inspect.isclass(returns) and issubclass(returns, BaseModel):
-            return returns.model_json_schema()
+        return self.__schema_for_annotation(returns)
 
-        return None
+    def __schema_for_annotation(self, annotation: Any) -> Optional[dict]:
+        if annotation is None or annotation is inspect._empty:
+            return None
+
+        try:
+            return TypeAdapter(annotation).json_schema()
+
+        except Exception:
+            return None
 
     def __extract_http_exception_statuses(self, method_object: Any) -> set[int]:
         try:
