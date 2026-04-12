@@ -86,8 +86,8 @@ class Configuration(metaclass=ConfigurationMeta):
     @classmethod
     def build(cls) -> "Configuration":
         chain = SourceChain(
-            name=f"{cls.__name__}.chain",
-            sources=list(cls.__config_sources__),
+            name    = f'{cls.__name__}.chain',
+            sources = list(cls.__config_sources__),
         )
 
         values: Dict[str, Any] = {}

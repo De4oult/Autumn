@@ -154,7 +154,7 @@ class Container:
 
         kwargs: Dict[str, Any] = {}
 
-        for name, parameter in signature.parameters.items():
+        for name, _ in signature.parameters.items():
             if skip_self and name == 'self':
                 continue
 

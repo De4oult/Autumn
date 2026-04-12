@@ -1,7 +1,10 @@
 {
     "application" : {
         "database" : {
-            "dsn" : "https://cloudflare.com"
+            "dsn" : [
+                "https://cloudflare.com",
+                "https://supabase.com"
+            ]
         }
     }    
 }

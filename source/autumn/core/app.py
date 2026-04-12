@@ -171,7 +171,7 @@ class Autumn:
                                 'websocket': websocket
                             }
                         )
-                                        
+
                     handler_callable = endpoint
 
                 else:

@@ -9,6 +9,7 @@ pydantic = "*"
 colorama = "*"
 click = "*"
 rich = "*"
+uvicorn = {extras = ["standard"], version = "*"}
 
 [dev-packages]
 uvicorn = "*"

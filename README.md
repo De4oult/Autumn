@@ -8,19 +8,18 @@
 [+] @query, @body
 [+] Pydantic validation
 [+] @json_response
-[+] Auto injection 
 
-[] cli
-- [] environment management
-- serve
-- service:create
-- controller:create
-- config:create
-- repository:create
+[+] Auto depdendency injection 
 
-[] Config Chain
-[] Config Classes
-[] Cors Config
+[+] FileResponse
+[+] StreamFileResponse
+[+] WebSocket
+[+] Optional arguments in methods of controller
+[+] Path Parameter: {path:path}
+[+] Config Classes
+[+] Config Injections
+
+[] Cors
 
 [] Static
 [] Resources
@@ -33,8 +32,9 @@
 - [+] Builder
 - [+] Viewer
 [] Docstring Parser
-[] curl export/auto Postman
 
+[] Framework Documentation
+[] Imports Customization
 
 [] repo by names
 [] ORM/Models
@@ -42,7 +42,6 @@
 [] Database/Cache/Logging/Queue providers
 
 [] Auth
-[] WebSocket signaling
 
 [] testing
 
@@ -52,6 +51,23 @@
 - 3xx - 
 - 4xx - yellow autumn/fog
 - 5xx - rain
+
+services.yaml
+service:
+    name: test
+    resolved:
+        - 1
+        - 2
+        - 3
+
+@env
+@yaml
+@json
+
+@yaml('./services')
+class ServiceConfig(Config):
+    service_name: Alias['service.name', str]
+    resolved: Alias['service.resolved', List[int]] # == [1, 2, 3]
 
 # Project
 | app/
