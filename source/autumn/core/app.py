@@ -39,34 +39,27 @@ class Autumn:
 
         self.__providers_synced: bool = False
 
+        self.__resolve_base_routes()
+
+    def __resolve_base_routes(self) -> None:
+        from autumn.core.routing.base import favicon_route
+
         if self.environment != Environment.PRODUCTION:
             self.__enable_documentation()
 
+        self.router.add_route('GET', '/favicon.ico', favicon_route)
+
     def __enable_documentation(self) -> None:
-        from autumn.core.documentation.router import (
+        from autumn.core.routing.base import (
             favicon_route,
-            services_json_route,
             dependencies_json_route,
             openapi_json_route, 
             dependencies_route,
             documentation_route
         )
 
-        self.router.add_route('GET', '/favicon', favicon_route)
-
-        self.router.add_route('GET', '/documentation/services.json', services_json_route(self))
         self.router.add_route('GET', '/documentation/dependencies.json', dependencies_json_route(self))
         self.router.add_route('GET', '/documentation/openapi.json', openapi_json_route(self))
-
-        self.router.add_route('GET', '/development/services.json', services_json_route(self))
-        self.router.add_route('GET', '/development/openapi.json', openapi_json_route(self))
-
-        self.router.add_route('GET', '/autumn/documentation/services.json', services_json_route(self))
-        self.router.add_route('GET', '/autumn/documentation/dependencies.json', dependencies_json_route(self))
-        self.router.add_route('GET', '/autumn/documentation/openapi.json', openapi_json_route(self))
-
-        self.router.add_route('GET', '/autumn/development/services.json', services_json_route(self))
-        self.router.add_route('GET', '/autumn/development/openapi.json', openapi_json_route(self))
 
         self.router.add_route('GET', '/autumn', documentation_route)
 

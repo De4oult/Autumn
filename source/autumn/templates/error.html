@@ -1,227 +1,31 @@
 <!DOCTYPE html>
 <html>
-
 <head>
     <title>Melancholic Autumn</title>
     <meta http-equiv="Content-Type" content="text/html;charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="/favicon" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.ico" />
+    
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 </head>
-
-<body>
-    <div class="flex flex-col w-full min-h-screen relative overflow-hidden">
-        <div class="leaf" style="top: 100px; left: 100px;"></div>
-        <div class="leaf leaf-1"></div>
-        <div class="leaf leaf-2"></div>
-        <div class="leaf leaf-3"></div>
-        <div class="leaf leaf-4"></div>
-        <div class="leaf leaf-5"></div>
-        <div class="w-full bg-gradient-to-r from-amber-500 to-orange-500 py-16 px-6 relative z-10 overflow-hidden">
-            <div class="header-leaf header-leaf-1"></div>
-            <div class="header-leaf header-leaf-2"></div>
-            <div class="header-leaf header-leaf-3"></div>
-            <div class="header-leaf header-leaf-4"></div>
-            <div class="header-leaf header-leaf-5"></div>
-            <div class="header-leaf header-leaf-6"></div>
-            <div class="header-leaf header-leaf-7"></div>
-            <div class="header-leaf header-leaf-8"></div>
-            <div class="max-w-3xl mx-auto">
-                <div class="flex flex-col md:flex-row items-start md:items-center gap-6">
-                    <div class="text-5xl md:text-7xl font-bold text-white border-r-0 md:border-r-4 border-white/30 pr-0 md:pr-8">
-                        {status}
-                    </div>
-                    <h1 class="text-2xl md:text-3xl font-semibold text-white leading-tight">
-                        {title}
-                    </h1>
-                </div>
-            </div>
+<body style="background-color: #1a1512;">
+    <div class="fixed inset-0 flex items-center justify-center overflow-hidden">
+        <div class="fixed inset-0 pointer-events-none" style="background-color: rgba(26, 21, 18, 0.95);">
         </div>
-        <div class="w-full bg-white py-12 px-6 relative z-10 flex-grow">
-            <div class="max-w-3xl mx-auto">
-                <div class="prose prose-amber">
-                    <p class="text-gray-700 text-lg"> {details} </p>
-                </div>
+
+        <div class="relative z-10 text-center px-4">
+            <div class="font-mono font-bold mb-6" style="font-size: 120px; line-height: 1; color: #F39C12; text-shadow: 0 2px 8px rgba(0,0,0,0.4);">
+                {status}
             </div>
+
+            <h1 class="font-bold mb-4" style="font-size: 32px; color: #FAF8F5;">
+                {title}
+            </h1>
+
+            <p class="max-w-md mx-auto" style="font-size: 16px; line-height: 1.6; color: rgba(250, 248, 245, 0.8);"> 
+                {details} 
+            </p>
         </div>
-        <style>
-            .leaf {{
-                position: absolute;
-                width: 40px;
-                height: 40px;
-                background-color: #f59e0b;
-                opacity: 0.7;
-                z-index: 1;
-                clip-path: polygon(50% 0%,
-                        80% 30%,
-                        100% 50%,
-                        80% 70%,
-                        50% 100%,
-                        20% 70%,
-                        0% 50%,
-                        20% 30%);
-                animation: falling 15s infinite ease-in-out;
-            }}
-
-            .leaf-1 {{
-                top: 10%;
-                left: 10%;
-                background-color: #f97316;
-                transform: rotate(15deg);
-                animation-delay: 0s;
-            }}
-
-            .leaf-2 {{
-                top: 20%;
-                right: 15%;
-                background-color: #d97706;
-                transform: rotate(45deg);
-                animation-delay: 1s;
-            }}
-
-            .leaf-3 {{
-                top: 50%;
-                left: 5%;
-                background-color: #b45309;
-                transform: rotate(-30deg);
-                animation-delay: 2s;
-            }}
-
-            .leaf-4 {{
-                bottom: 20%;
-                right: 10%;
-                background-color: #f59e0b;
-                transform: rotate(-60deg);
-                animation-delay: 3s;
-            }}
-
-            .leaf-5 {{
-                bottom: 40%;
-                left: 20%;
-                background-color: #ea580c;
-                transform: rotate(20deg);
-                animation-delay: 0s;
-            }}
-
-            /* Header falling leaves */
-            .header-leaf {{
-                position: absolute;
-                width: 30px;
-                height: 30px;
-                opacity: 0.8;
-                z-index: 5;
-                clip-path: polygon(50% 0%,
-                        60% 10%,
-                        70% 30%,
-                        75% 50%,
-                        70% 70%,
-                        60% 90%,
-                        50% 100%,
-                        40% 90%,
-                        30% 70%,
-                        25% 50%,
-                        30% 30%,
-                        40% 10%);
-                animation: headerFalling 8s infinite linear;
-            }}
-
-            .header-leaf-1 {{
-                top: -30px;
-                left: 5%;
-                background-color: #fbbf24;
-                animation-delay: 0s;
-            }}
-
-            .header-leaf-2 {{
-                top: -20px;
-                left: 10%;
-                background-color: #f97316;
-                animation-delay: 0s;
-                width: 25px;
-                height: 25px;
-            }}
-
-            .header-leaf-3 {{
-                top: -25px;
-                left: 15%;
-                background-color: #b45309;
-                animation-delay: 0s;
-                width: 35px;
-                height: 35px;
-            }}
-
-            .header-leaf-4 {{
-                top: -15px;
-                left: 20%;
-                background-color: #d97706;
-                animation-delay: 0s;
-            }}
-
-            .header-leaf-5 {{
-                top: -30px;
-                left: 25%;
-                background-color: #ea580c;
-                animation-delay: 1.5s;
-                width: 22px;
-                height: 22px;
-            }}
-
-            .header-leaf-6 {{
-                top: -25px;
-                left: 8%;
-                background-color: #f59e0b;
-                animation-delay: 2.5s;
-                width: 28px;
-                height: 28px;
-            }}
-
-            .header-leaf-7 {{
-                top: -20px;
-                left: 18%;
-                background-color: #92400e;
-                animation-delay: 3.5s;
-                width: 20px;
-                height: 20px;
-            }}
-
-            .header-leaf-8 {{
-                top: -30px;
-                left: 30%;
-                background-color: #fdba74;
-                animation-delay: 4s;
-                width: 32px;
-                height: 32px;
-            }}
-
-            @keyframes falling {{
-                0% {{
-                    transform: translateY(0) rotate(0deg) scale(0.8);
-                    opacity: 0.7;
-                }}
-
-                50% {{
-                    transform: translateY(20px) rotate(180deg) scale(1);
-                    opacity: 0.9;
-                }}
-
-                100% {{
-                    transform: translateY(0) rotate(360deg) scale(0.8);
-                    opacity: 0.7;
-                }}
-            }}
-
-            @keyframes headerFalling {{
-                0% {{
-                    transform: translateY(-10px) rotate(0deg) scale(0.8);
-                    opacity: 0.9;
-                }}
-
-                100% {{
-                    transform: translateY(250px) rotate(360deg) scale(0.5);
-                    opacity: 0.3;
-                }}
-            }}
-        </style>
     </div>
 </body>
 </html>
