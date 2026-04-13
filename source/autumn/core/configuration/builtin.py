@@ -3,18 +3,22 @@ from typing import List, Optional
 from autumn.core.configuration.configuration import Configuration
 
 class CORSConfiguration(Configuration):
+    __autumn_builtin_config__ = True
+
     enabled: bool = True
 
-    allowed_origins: List[str] = ['']
-    allowed_methods: List[str] = ['']
-    allowed_headers: List[str] = ['']
+    allowed_origins: List[str] = []
+    allowed_methods: List[str] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
+    allowed_headers: List[str] = []
 
     allow_credentials: bool = False
     expose_headers: List[str] = []
     max_age: int = 600
 
 class ApplicationConfiguration(Configuration):
-    name: Optional[str]
+    __autumn_builtin_config__ = True
+
+    name: Optional[str] = None
 
     host: str = '127.0.0.1'
     port: int = 8000
@@ -25,6 +29,8 @@ class ApplicationConfiguration(Configuration):
     log_level: str = 'info'
 
 class WebsocketConfiguration(Configuration):
+    __autumn_builtin_config__ = True
+
     enabled: bool = True
 
     ping_interval: int = 20

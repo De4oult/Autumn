@@ -19,38 +19,32 @@
 [+] Config Classes
 [+] Config Injections
 
-[] Cors
-
-[] Static
-[] Resources
-
-[] Class based returns
-- Private, Casted types
-- to json
+[+] Class based returns
+[+] Cors
+[+] Accept based exception return type
 
 [+] OpenApi
 - [+] Builder
 - [+] Viewer
-[] Docstring Parser
+[+] Docstring Parser
+[+] Rework exceptions screen
 
-[] Framework Documentation
 [] Imports Customization
+[] Tests
+[] Framework Documentation
+[] PyPi pipline
+
+[] testing
+[] Auth
+
+[] Static
+[] Resources
 
 [] repo by names
 [] ORM/Models
 
 [] Database/Cache/Logging/Queue providers
 
-[] Auth
-
-[] testing
-
-[] Rework exceptions screen
-- 1xx - 
-- 2xx - sunny autumn
-- 3xx - 
-- 4xx - yellow autumn/fog
-- 5xx - rain
 
 services.yaml
 service:
@@ -89,7 +83,7 @@ class ServiceConfig(Config):
 
 # Example
 ```python
-from autumn import Autumn, REST, get, post, Request, JSONResponse, query, body, json_response, HTMLResponse, dependency, service
+from autumn import Autumn, REST, get, post, Request, JSONResponse, query, HTMLResponse, dependency, service
 
 from pydantic import BaseModel, Field
 from typing import Optional
@@ -169,17 +163,15 @@ class UserController:
         return JSONResponse({'page': page})
 
     @post('/test')
-    @body(UserSchema)
-    async def create_user(self, request: Request, body: UserSchema):
-        return JSONResponse({'ok': True, 'user': body.model_dump(mode='json')})
+    async def create_user(self, request: Request, user: UserSchema):
+        return JSONResponse({'ok': True, 'user': user.model_dump(mode='json')})
 
     @get('/current/{name:str}')
     async def current_name(self, request: Request, name: str):
         return HTMLResponse(name)
 
     @get('/test_json_response/{name:str}')
-    @json_response
-    async def get_test_user(self, request: Request, name: str):
+    async def get_test_user(self, request: Request, name: str) -> UserSchema:
         return UserSchema(name=name, age=15)
 
 ```

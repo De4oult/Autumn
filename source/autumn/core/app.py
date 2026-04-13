@@ -1,4 +1,5 @@
 from autumn.core.websocket.websocket import WebSocket, WebSocketDisconnect
+from autumn.core.configuration.builtin import CORSConfiguration
 from autumn.core.dependencies.container import Container, ExecutionContext
 from autumn.core.configuration.configuration import get_registered_configs
 from autumn.core.introspection import value_contains_pydantic_model
@@ -37,6 +38,7 @@ class Autumn:
         
         self.middleware = MiddlewareManager()
         self.container = Container()
+        self.__cors_configuration: Optional[CORSConfiguration] = None
 
         self.__providers_synced: bool = False
 
@@ -58,15 +60,13 @@ class Autumn:
             autumn_web_route
         )
 
+        self.router.add_route('GET', '/favicon.ico', favicon_route)
+
         self.router.add_route('GET', '/documentation/dependencies.json', dependencies_json_route(self))
         self.router.add_route('GET', '/documentation/openapi.json', openapi_json_route(self))
 
         self.router.add_route('GET', '/autumn', autumn_web_route)
-        self.router.add_route('GET', '/autumn/', autumn_web_route)
-        self.router.add_route('GET', '/autumn/openapi', autumn_web_route)
-        self.router.add_route('GET', '/autumn/dependencies', autumn_web_route)
-        self.router.add_route('GET', '/autumn/documentation', autumn_web_route)
-
+        
     def __sync_providers(self):
         if self.__providers_synced:
             return
@@ -85,6 +85,17 @@ class Autumn:
                 scope = Scope.APP
             )
 
+            for base_class in configuration_class.__mro__[1:]:
+                if getattr(base_class, '__autumn_builtin_config__', False):
+                    self.container.register_value(
+                        base_class,
+                        configuration,
+                        scope = Scope.APP
+                    )
+
+            if issubclass(configuration_class, CORSConfiguration):
+                self.__cors_configuration = configuration
+
         self.__providers_synced = True
 
     def __normalize_response(self, result, handler_callable) -> Response:
@@ -95,6 +106,189 @@ class Autumn:
             return JSONResponse(result)
 
         raise TypeError(f'Handler returned unsupported result type: {type(result).__name__}')
+
+    @staticmethod
+    def __normalize_header_values(values) -> list[str]:
+        if values is None:
+            return []
+
+        return [
+            str(value).strip()
+            for value in values
+            if str(value).strip()
+        ]
+
+    @staticmethod
+    def __merge_vary(current: Optional[str], *values: str) -> Optional[str]:
+        merged: list[str] = []
+
+        for chunk in (current, *values):
+            if not chunk:
+                continue
+
+            for item in str(chunk).split(','):
+                normalized = item.strip()
+
+                if normalized and normalized not in merged:
+                    merged.append(normalized)
+
+        if not merged:
+            return None
+
+        return ', '.join(merged)
+
+    def __is_cors_preflight(self, request: Request) -> bool:
+        if self.__cors_configuration is None or not self.__cors_configuration.enabled:
+            return False
+
+        return (
+            request.method == 'OPTIONS'
+            and bool(request.header('origin'))
+            and bool(request.header('access-control-request-method'))
+        )
+
+    def __is_cors_origin_allowed(self, origin: str) -> bool:
+        configuration = self.__cors_configuration
+
+        if configuration is None or not configuration.enabled:
+            return False
+
+        allowed_origins = self.__normalize_header_values(configuration.allowed_origins)
+
+        return '*' in allowed_origins or origin in allowed_origins
+
+    def __is_cors_method_allowed(self, method: str) -> bool:
+        configuration = self.__cors_configuration
+
+        if configuration is None or not configuration.enabled:
+            return False
+
+        allowed_methods = [
+            value.upper()
+            for value in self.__normalize_header_values(configuration.allowed_methods)
+        ]
+
+        return '*' in allowed_methods or method.upper() in allowed_methods
+
+    def __is_cors_headers_allowed(self, requested_headers: list[str]) -> bool:
+        configuration = self.__cors_configuration
+
+        if configuration is None or not configuration.enabled:
+            return False
+
+        allowed_headers = [
+            value.lower()
+            for value in self.__normalize_header_values(configuration.allowed_headers)
+        ]
+
+        if '*' in allowed_headers:
+            return True
+
+        return all(header.lower() in allowed_headers for header in requested_headers)
+
+    def __build_cors_headers(self, request: Request, *, preflight: bool = False) -> dict[str, str]:
+        configuration = self.__cors_configuration
+
+        if configuration is None or not configuration.enabled:
+            return {}
+
+        origin = request.header('origin')
+
+        if not origin or not self.__is_cors_origin_allowed(origin):
+            if preflight and origin:
+                raise HTTPException(
+                    status = 403,
+                    details = 'CORS origin is not allowed'
+                )
+
+            return {}
+
+        allowed_origins = self.__normalize_header_values(configuration.allowed_origins)
+        allow_any_origin = '*' in allowed_origins
+
+        headers: dict[str, str] = {
+            'Access-Control-Allow-Origin': (
+                '*' 
+                if allow_any_origin and not configuration.allow_credentials 
+                else origin
+            )
+        }
+
+        vary = None if headers['Access-Control-Allow-Origin'] == '*' else 'Origin'
+
+        if configuration.allow_credentials:
+            headers['Access-Control-Allow-Credentials'] = 'true'
+
+        expose_headers = self.__normalize_header_values(configuration.expose_headers)
+
+        if expose_headers and not preflight:
+            headers['Access-Control-Expose-Headers'] = ', '.join(expose_headers)
+
+        if preflight:
+            requested_method = (request.header('access-control-request-method') or '').upper()
+
+            if not requested_method or not self.__is_cors_method_allowed(requested_method):
+                raise HTTPException(
+                    status = 405,
+                    details = 'CORS method is not allowed'
+                )
+
+            allowed_methods = [
+                value.upper()
+                for value in self.__normalize_header_values(configuration.allowed_methods)
+            ]
+
+            headers['Access-Control-Allow-Methods'] = ', '.join(
+                [requested_method]
+                if '*' in allowed_methods
+                else allowed_methods
+            )
+
+            requested_headers_raw = request.header('access-control-request-headers') or ''
+            requested_headers = [
+                header.strip()
+                for header in requested_headers_raw.split(',')
+                if header.strip()
+            ]
+
+            if requested_headers and not self.__is_cors_headers_allowed(requested_headers):
+                raise HTTPException(
+                    status = 400,
+                    details = 'CORS headers are not allowed'
+                )
+
+            allowed_headers = self.__normalize_header_values(configuration.allowed_headers)
+
+            if requested_headers_raw:
+                headers['Access-Control-Allow-Headers'] = (
+                    requested_headers_raw
+                    if '*' in [value.lower() for value in allowed_headers]
+                    else ', '.join(allowed_headers)
+                )
+
+            elif allowed_headers:
+                headers['Access-Control-Allow-Headers'] = ', '.join(allowed_headers)
+
+            headers['Access-Control-Max-Age'] = str(configuration.max_age)
+            vary = self.__merge_vary(vary, 'Access-Control-Request-Method', 'Access-Control-Request-Headers')
+
+        if vary is not None:
+            headers['Vary'] = vary
+
+        return headers
+
+    def __apply_response_headers(self, response: Response, headers: dict[str, str]) -> Response:
+        if not headers:
+            return response
+
+        for key, value in headers.items():
+            if key.lower() == 'vary':
+                response.headers['Vary'] = self.__merge_vary(response.headers.get('Vary'), value) or value
+                continue
+
+            response.headers[key] = value
+
+        return response
 
     def startup(self, func: Callable) -> Callable:
         self.startup_hooks.append(func)
@@ -157,6 +351,8 @@ class Autumn:
         if scope['type'] == 'lifespan':
             await self.__lifespan(scope, receive, send)
             return
+
+        self.__sync_providers()
 		
         if scope['type'] == 'websocket':
             websocket: WebSocket = WebSocket(scope, receive, send)
@@ -225,6 +421,38 @@ class Autumn:
 
         request = Request(scope, receive)
         request.app = self
+
+        if self.__is_cors_preflight(request):
+            try:
+                response = Response(
+                    body = '',
+                    status = 204,
+                    headers = self.__build_cors_headers(request, preflight = True)
+                )
+
+            except HTTPException as error:
+                response = error.to_response(request)
+
+            except Exception as error:
+                print(error)
+                response = HTTPException(
+                    status = 500,
+                    details = str(error)
+                ).to_response(request)
+
+            await send({
+                'type'    : 'http.response.start',
+                'status'  : response.status,
+                'headers' : response.headers_as_list(),
+            })
+
+            await send({
+                'type'      : 'http.response.body',
+                'body'      : b'',
+                'more_body' : False
+            })
+            return
+
         match = self.router.match(scope['method'], scope['path'])
 
         try:
@@ -328,14 +556,19 @@ class Autumn:
             )
 
         except HTTPException as error:
-            response = error.response
+            response = error.to_response(request)
 
         except Exception as error:
             print(error)
             response = HTTPException(
                 status = 500, 
                 details = str(error)
-            ).response
+            ).to_response(request)
+
+        response = self.__apply_response_headers(
+            response,
+            self.__build_cors_headers(request)
+        )
         
         await send({
             'type'    : 'http.response.start',

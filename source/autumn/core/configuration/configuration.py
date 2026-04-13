@@ -9,11 +9,13 @@ from autumn.core.configuration.casting import cast_value, MISSING
 from autumn.core.configuration.maple import AliasMeta
 
 CONFIG_REGISTRY: Set[Type['Configuration']] = set()
+BUILTIN_CONFIGURATIONS_IMPORTED = False
 INTERNAL_FIELDS = {
     '__config_sources__',
     '__fields__',
     '__field_types__',
-    '__aliases__'
+    '__aliases__',
+    '__autumn_builtin_config__'
 }
 
 
@@ -128,5 +130,44 @@ class Configuration(metaclass=ConfigurationMeta):
         return cls(**values)
 
 
+def ensure_builtin_configurations_registered() -> None:
+    global BUILTIN_CONFIGURATIONS_IMPORTED
+
+    if BUILTIN_CONFIGURATIONS_IMPORTED:
+        return
+
+    from autumn.core.configuration import builtin as _builtin
+
+    BUILTIN_CONFIGURATIONS_IMPORTED = True
+
+
+def _resolve_effective_configurations(configs: List[Type[Configuration]]) -> List[Type[Configuration]]:
+    effective: List[Type[Configuration]] = []
+
+    for config_class in configs:
+        is_builtin = bool(getattr(config_class, '__autumn_builtin_config__', False))
+
+        if is_builtin:
+            overridden = any(
+                other is not config_class and issubclass(other, config_class)
+                for other in configs
+            )
+
+            if overridden:
+                continue
+
+        effective.append(config_class)
+
+    return sorted(
+        effective,
+        key = lambda config_class: (
+            getattr(config_class, '__module__', ''),
+            getattr(config_class, '__qualname__', config_class.__name__)
+        )
+    )
+
+
 def get_registered_configs() -> List[Type[Configuration]]:
-    return list(CONFIG_REGISTRY)
+    ensure_builtin_configurations_registered()
+    
+    return _resolve_effective_configurations(list(CONFIG_REGISTRY))

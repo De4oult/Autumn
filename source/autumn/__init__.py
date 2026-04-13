@@ -6,6 +6,11 @@ except PackageNotFoundError:
     __version__ = '0.1.0'
 
 from .core.app import Autumn
+from .core.configuration.builtin import (
+    ApplicationConfiguration,
+    CORSConfiguration,
+    WebsocketConfiguration
+)
 from .core.request import (
     Request, 
     query,
@@ -40,6 +45,9 @@ from .core.documentation import (
 __all__ = (
     'Autumn', 
     'Request',
+    'CORSConfiguration',
+    'ApplicationConfiguration',
+    'WebsocketConfiguration',
     'query',
     body,
     'Response', 
