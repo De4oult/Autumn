@@ -1,8 +1,6 @@
 from typing import List, Optional
 
 from autumn.core.configuration.configuration import Configuration
-from autumn.core.configuration.maple import Maple
-
 
 class CORSConfiguration(Configuration):
     enabled: bool = True

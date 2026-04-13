@@ -1,4 +1,3 @@
-# autumn/core/configuration/configuration.py
 from __future__ import annotations
 
 from typing import Any, Dict, List, Type, Set, get_origin, get_args, Annotated
@@ -32,7 +31,7 @@ class ConfigurationMeta(type):
 
         inherited_sources: List[ConfigurationSource] = []
         for b in reversed(cls.__mro__[1:]):
-            inherited_sources.extend(getattr(b, "__config_sources__", []))
+            inherited_sources.extend(getattr(b, '__config_sources__', []))
         cls.__config_sources__ = list(inherited_sources)
 
         fields: Dict[str, Any] = {}
@@ -40,10 +39,10 @@ class ConfigurationMeta(type):
         field_aliases: Dict[str, Alias] = {}
 
         for b in reversed(cls.__mro__):
-            annotations = getattr(b, "__annotations__", {}) or {}
+            annotations = getattr(b, '__annotations__', {}) or {}
 
             for field_name, annotation in annotations.items():
-                if field_name in INTERNAL_FIELDS or field_name.startswith("_"):
+                if field_name in INTERNAL_FIELDS or field_name.startswith('_'):
                     continue
 
                 fields[field_name] = annotation
@@ -51,15 +50,13 @@ class ConfigurationMeta(type):
                 real_type, meta = _split_annotated(annotation)
                 field_types[field_name] = real_type
 
-                # Maple(...) => Annotated[T, AliasMeta(path)]
                 for m in meta:
                     if isinstance(m, AliasMeta):
                         field_aliases[field_name] = Alias(path=m.path)
                     elif isinstance(m, Alias):
-                        field_aliases[field_name] = m  # если кто-то положил Alias прямо в metadata
+                        field_aliases[field_name] = m
 
-                # (опционально) старый стиль: field = Alias("x.y")
-                maybe_value = getattr(b, "__dict__", {}).get(field_name, None)
+                maybe_value = getattr(b, '__dict__', {}).get(field_name, None)
                 if isinstance(maybe_value, Alias):
                     field_aliases[field_name] = maybe_value
 
@@ -67,7 +64,7 @@ class ConfigurationMeta(type):
         cls.__field_types__ = field_types
         cls.__aliases__ = field_aliases
 
-        if name != "Configuration":
+        if name != 'Configuration':
             CONFIG_REGISTRY.add(cls)
 
         return cls
@@ -84,7 +81,7 @@ class Configuration(metaclass=ConfigurationMeta):
 
     @classmethod
     @classmethod
-    def build(cls) -> "Configuration":
+    def build(cls) -> 'Configuration':
         chain = SourceChain(
             name    = f'{cls.__name__}.chain',
             sources = list(cls.__config_sources__),
@@ -106,16 +103,16 @@ class Configuration(metaclass=ConfigurationMeta):
                         continue
 
                     raise AutumnConfigValueMissing(
-                        f"[{cls.__name__}.{field_name}] missing value for path '{alias.path}' "
-                        f"from sources: {[s.name for s in chain.sources]}"
+                        f'[{cls.__name__}.{field_name}] missing value for path \'{alias.path}\' '
+                        f'from sources: {[s.name for s in chain.sources]}'
                     )
 
                 try:
                     values[field_name] = cast_value(raw, field_type)
                 except AutumnConfigCastError as error:
                     raise AutumnConfigError(
-                        f"[{cls.__name__}.{field_name}] cannot cast path '{alias.path}' "
-                        f"value={raw!r} to {field_type!r}"
+                        f'[{cls.__name__}.{field_name}] cannot cast path \'{alias.path}\' '
+                        f'value={raw!r} to {field_type!r}'
                     ) from error
 
                 continue
@@ -125,7 +122,7 @@ class Configuration(metaclass=ConfigurationMeta):
                 continue
 
             raise AutumnConfigValueMissing(
-                f"[{cls.__name__}.{field_name}] has no Alias and no default value"
+                f'[{cls.__name__}.{field_name}] has no Alias and no default value'
             )
 
         return cls(**values)

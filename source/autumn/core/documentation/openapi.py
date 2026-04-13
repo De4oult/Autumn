@@ -1,5 +1,10 @@
 import ast
 import inspect
+from autumn.core.introspection import (
+    annotation_contains_pydantic_model,
+    annotation_is_response,
+    get_declared_body_parameter
+)
 from typing import Callable, Any, Dict, List, Optional, Type
 from uuid import UUID
 
@@ -22,16 +27,27 @@ TYPENAME_TO_SCHEMA = {
     'uuid'  : { 'type' : 'string', 'format': 'uuid' }
 }
 
+DEPRECATED_TAG_NAMES = {'deprecated', 'depricated', 'depr'}
 
-def _doc_parts(obj: Any) -> tuple[Optional[str], Optional[str]]:
-    doc = inspect.getdoc(obj) or ''
 
-    if not doc.strip():
+def _normalize_tag_name(value: Any) -> str:
+    tag = str(value).strip()
+
+    if tag.lower() in DEPRECATED_TAG_NAMES:
+        return 'Deprecated'
+
+    return tag
+
+
+def _docstring_parts(obj: Any) -> tuple[Optional[str], Optional[str]]:
+    docstring = inspect.getdoc(obj) or ''
+
+    if not docstring.strip():
         return None, None
 
-    lines = doc.splitlines()
+    lines   = docstring.splitlines()
     summary = (lines[0].strip() if lines else None) or None
-    body = '\n'.join(lines[1:]).strip() or None
+    body    = '\n'.join(lines[1:]).strip() or None
 
     return summary, body
 
@@ -75,7 +91,7 @@ class OpenAPIGenerator:
 
             if tag not in seen:
                 seen.add(tag)
-                _, doc_body = _doc_parts(controller_class)
+                _, doc_body = _docstring_parts(controller_class)
                 description = getattr(controller_class, '__description__', None) or doc_body
 
                 tags.append({
@@ -121,14 +137,21 @@ class OpenAPIGenerator:
         parameters.extend(self.__build_path_parameters(route))
         parameters.extend(self.__build_query_parameters(method_object))
 
-        request_body = self.__build_request_body(method_object)
+        request_body  = self.__build_request_body(method_object)
         contoller_tag = getattr(controller_class, '__tag__', None) or controller_class.__name__.removesuffix('Controller')
-        doc_summary, doc_description = _doc_parts(method_object)
 
-        method_summary = self.__get_attribute_chain(method_object, '__summary__', None)
+        doc_summary, doc_description = _docstring_parts(method_object)
+
+        method_summary     = self.__get_attribute_chain(method_object, '__summary__', None)
         method_description = self.__get_attribute_chain(method_object, '__description__', None)
-        method_tags = self.__get_attribute_chain(method_object, '__tags__', []) or []
-        operation_tags = [contoller_tag, *method_tags] if method_tags else [contoller_tag]
+        method_tags        = self.__get_attribute_chain(method_object, '__tags__', []) or []
+        operation_tags     = []
+
+        for tag in [contoller_tag, *method_tags] if method_tags else [contoller_tag]:
+            normalized_tag = _normalize_tag_name(tag)
+
+            if normalized_tag and normalized_tag not in operation_tags:
+                operation_tags.append(normalized_tag)
         
         responses = self.__build_responses(route, controller_class, method_name, method_object)
 
@@ -141,7 +164,7 @@ class OpenAPIGenerator:
             'tags'        : operation_tags
         }
 
-        if any(str(tag).strip().lower() in ('deprecated', 'depricated') for tag in operation_tags):
+        if any(str(tag).strip().lower() in DEPRECATED_TAG_NAMES for tag in operation_tags):
             operation['deprecated'] = True
 
         if request_body is not None:
@@ -149,8 +172,10 @@ class OpenAPIGenerator:
 
         if method_description:
             operation['description'] = method_description
+
         elif doc_description:
             operation['description'] = doc_description
+            
         else:
             operation.pop('description')
 
@@ -198,18 +223,22 @@ class OpenAPIGenerator:
         return parameters
 
     def __build_request_body(self, method_object: Any) -> Optional[dict]:
-        body_model = self.__get_attribute_chain(method_object, '__body_schema__', None)
+        try:
+            body_parameter = get_declared_body_parameter(method_object, skip_self = True)
 
-        if body_model is None:
+        except RuntimeError:
             return None
 
-        schema = self.__schema_for_annotation(body_model)
+        if body_parameter is None:
+            return None
+
+        schema = self.__schema_for_annotation(body_parameter.annotation)
 
         if schema is None:
             return None
 
         return {
-            'required' : True,
+            'required' : body_parameter.required,
             'content'  : {
                 'application/json' : {
                     'schema': schema
@@ -220,16 +249,21 @@ class OpenAPIGenerator:
     def __build_responses(self, route, controller_class: Type[Any], method_name: str, method_object: Any) -> dict:
         responses: Dict[str, Any] = {}
 
-        is_json_response = bool(self.__get_attribute_chain(method_object, '__json_response__', False))
-        response_model = self.__get_attribute_chain(method_object, '__response_model__', None)
         returns = inspect.signature(method_object).return_annotation
+        is_json_response = bool(self.__get_attribute_chain(method_object, '__json_response__', False))
+        auto_json_response = (
+            returns is not inspect._empty
+            and not annotation_is_response(returns)
+            and annotation_contains_pydantic_model(returns)
+        )
+        response_model = self.__get_attribute_chain(method_object, '__response_model__', None) or returns
 
         responses['200'] = { 'description': 'Success' }
 
         if getattr(method_object, '__query_parameters__', []):
             responses.setdefault('400', { 'description': 'Bad Request' })
             
-        if self.__get_attribute_chain(method_object, '__body_schema__', None) is not None:
+        if self.__build_request_body(method_object) is not None:
             responses.setdefault('422', { 'description': 'Validation Error' })
 
         responses.setdefault('500', { 'description': 'Internal Server Error' })
@@ -237,7 +271,7 @@ class OpenAPIGenerator:
         for code in self.__extract_http_exception_statuses(method_object):
             responses.setdefault(str(code), { 'description': f'HTTP {code}' })
 
-        if is_json_response:
+        if is_json_response or auto_json_response:
             schema = self.__schema_for_annotation(response_model) if response_model is not None else self.__infer_json_response_schema(method_object)
 
             if schema is not None:

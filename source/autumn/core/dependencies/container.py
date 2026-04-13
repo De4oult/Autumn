@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from autumn.core.exception.exception import DependencyInjectionError, DependencyProviderError
+from autumn.core.introspection import get_declared_body_parameter
 from autumn.core.dependencies.scope import Scope
+from autumn.core.response.exception import HTTPException
 
 # Built-in Providers
 from autumn.core.websocket.websocket import WebSocket
@@ -9,6 +11,7 @@ from autumn.core.request.request import Request
 
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Type, TypeVar, get_type_hints
+from pydantic import TypeAdapter, ValidationError
 
 import inspect
 
@@ -92,6 +95,51 @@ class Container:
             return provider
 
         raise DependencyProviderError(f'No provider for: {key}')
+
+    def __can_resolve_dependency(self, key: Any) -> bool:
+        try:
+            self.__get_provider(key)
+
+            return True
+
+        except (DependencyProviderError, TypeError):
+            return False
+
+    async def __resolve_request_body(self, request: Request, parameter) -> Any:
+        raw = await request.body()
+
+        if not raw or raw.strip() == b'':
+            if parameter.default is not inspect.Parameter.empty:
+                return parameter.default
+
+            raise HTTPException(
+                status = 400,
+                details = 'Request body is empty'
+            )
+
+        try:
+            payload = await request.json()
+
+        except Exception as error:
+            raise HTTPException(
+                status = 400,
+                details = f'Invalid request body: {str(error)}'
+            ) from error
+
+        try:
+            return TypeAdapter(parameter.annotation).validate_python(payload)
+
+        except ValidationError as error:
+            raise HTTPException(
+                status = 422,
+                details = str(error)
+            ) from error
+
+        except Exception as error:
+            raise HTTPException(
+                status = 400,
+                details = f'Invalid request body: {str(error)}'
+            ) from error
     
     async def resolve(self, key: Type[Any], context: Optional[ExecutionContext] = None) -> Any:
         provider = self.__get_provider(key)
@@ -193,6 +241,19 @@ class Container:
             for parameter in signature.parameters.values()
         )
 
+        try:
+            body_parameter = get_declared_body_parameter(
+                func,
+                provided_kwargs = provided_kwargs,
+                skip_self = skip_self,
+                can_resolve_dependency = self.__can_resolve_dependency
+            )
+
+        except RuntimeError as error:
+            raise DependencyInjectionError(str(error)) from error
+
+        parsed_body = inspect.Parameter.empty
+
         for name, parameter in signature.parameters.items():
             if skip_self and name == 'self':
                 continue
@@ -202,6 +263,22 @@ class Container:
 
             if name in provided_kwargs:
                 kwargs[name] = provided_kwargs[name]
+                continue
+
+            if body_parameter is not None and name == body_parameter.name:
+                request = provided_kwargs.get('request')
+
+                if request is None and context is not None:
+                    request = context.values.get(Request)
+
+                if request is None:
+                    raise DependencyInjectionError(f'Cannot resolve request body parameter \'{name}\' for {func} without Request')
+
+                if parsed_body is inspect.Parameter.empty:
+                    parsed_body = await self.__resolve_request_body(request, body_parameter)
+
+                kwargs[name] = parsed_body
+                
                 continue
 
             if name in hints:

@@ -3,6 +3,11 @@ from autumn.core.documentation.openapi import OpenAPIGenerator
 
 from pathlib import Path
 
+NO_CACHE_HEADERS = {
+    'Cache-Control' : 'no-store, no-cache, must-revalidate, max-age=0',
+    'Pragma'        : 'no-cache',
+    'Expires'       : '0'
+}
 
 async def favicon_route():
     favicon_path: Path = Path(__file__).resolve().parents[2] / 'public' / 'autumn.svg'
@@ -15,7 +20,8 @@ def dependencies_json_route(app):
         
         return JSONResponse(
             DependenciesDocumentationGenerator().generate(app),
-            status = 200
+            status = 200,
+            headers = NO_CACHE_HEADERS
         )
     
     return handler
@@ -25,22 +31,15 @@ def openapi_json_route(app):
 
     async def openapi_json(request):
         schema = generator.generate(app)
-        return JSONResponse(schema)
+        return JSONResponse(schema, headers = NO_CACHE_HEADERS)
     
     return openapi_json
 
-async def dependencies_route(request):
-    template_path: Path = Path(__file__).resolve().parents[2] / 'templates' / 'documentation' / 'dependencies.html'
+async def autumn_web_route(request):    
+    template_path: Path = Path(__file__).resolve().parents[2] / 'templates' / 'autumn.html'
 
     return HTMLResponse(
-        template_path.read_text(encoding = 'utf-8'), 
-        status = 200
-    )
-
-async def documentation_route(request):
-    template_path: Path = Path(__file__).resolve().parents[2] / 'templates' / 'documentation' / 'openapi.html'
-
-    return HTMLResponse(
-        template_path.read_text(encoding = 'utf-8'), 
-        status = 200
-    )
+            template_path.read_text(encoding = 'utf-8'), 
+            status = 200,
+            headers = NO_CACHE_HEADERS
+        )

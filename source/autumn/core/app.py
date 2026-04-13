@@ -1,9 +1,10 @@
 from autumn.core.websocket.websocket import WebSocket, WebSocketDisconnect
 from autumn.core.dependencies.container import Container, ExecutionContext
 from autumn.core.configuration.configuration import get_registered_configs
+from autumn.core.introspection import value_contains_pydantic_model
 from autumn.core.middleware.manager import MiddlewareManager
 from autumn.core.response.exception import HTTPException
-from autumn.core.response.response import Response
+from autumn.core.response.response import JSONResponse, Response
 from autumn.core.dependencies.scope import Scope
 from autumn.core.request.request import Request
 from autumn.core.routing.router import router
@@ -54,17 +55,17 @@ class Autumn:
             favicon_route,
             dependencies_json_route,
             openapi_json_route, 
-            dependencies_route,
-            documentation_route
+            autumn_web_route
         )
 
         self.router.add_route('GET', '/documentation/dependencies.json', dependencies_json_route(self))
         self.router.add_route('GET', '/documentation/openapi.json', openapi_json_route(self))
 
-        self.router.add_route('GET', '/autumn', documentation_route)
-
-        self.router.add_route('GET', '/autumn/dependencies', dependencies_route)
-        self.router.add_route('GET', '/autumn/documentation', documentation_route)
+        self.router.add_route('GET', '/autumn', autumn_web_route)
+        self.router.add_route('GET', '/autumn/', autumn_web_route)
+        self.router.add_route('GET', '/autumn/openapi', autumn_web_route)
+        self.router.add_route('GET', '/autumn/dependencies', autumn_web_route)
+        self.router.add_route('GET', '/autumn/documentation', autumn_web_route)
 
     def __sync_providers(self):
         if self.__providers_synced:
@@ -85,6 +86,15 @@ class Autumn:
             )
 
         self.__providers_synced = True
+
+    def __normalize_response(self, result, handler_callable) -> Response:
+        if isinstance(result, Response):
+            return result
+
+        if getattr(handler_callable, '__json_response__', False) or value_contains_pydantic_model(result):
+            return JSONResponse(result)
+
+        raise TypeError(f'Handler returned unsupported result type: {type(result).__name__}')
 
     def startup(self, func: Callable) -> Callable:
         self.startup_hooks.append(func)
@@ -247,7 +257,7 @@ class Autumn:
                 
                 original_method = getattr(controller_class, method_name)
 
-                for attribute in ('__query_parameters__', '__body_schema__', '__json_response__'):
+                for attribute in ('__query_parameters__', '__body_schema__', '__json_response__', '__response_model__'):
                     if hasattr(original_method, attribute):
                         setattr(endpoint, attribute, getattr(original_method, attribute))
                     
@@ -312,7 +322,10 @@ class Autumn:
 
                 request.query = SimpleNamespace(**parsed)
 
-            response = await wrapped_handler(request)
+            response = self.__normalize_response(
+                await wrapped_handler(request),
+                handler_callable
+            )
 
         except HTTPException as error:
             response = error.response

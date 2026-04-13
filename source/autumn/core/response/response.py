@@ -22,7 +22,7 @@ class Response:
     def headers_as_list(self) -> List[Tuple[bytes, bytes]]:
         encoded_headers: List[Tuple[bytes, bytes]] = [
             (b'content-type', self.content_type.encode('utf-8')),
-            (b'autumn', b'thank u for usin\' my framework')
+            (b'autumn', b'Hello :)')
         ]
 
         for key, value in self.headers.items():
