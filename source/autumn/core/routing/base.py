@@ -1,4 +1,4 @@
-from autumn.core.response import HTMLResponse, JSONResponse, FileResponse
+from autumn.core.response.response import HTMLResponse, JSONResponse, FileResponse
 from autumn.core.documentation.openapi import OpenAPIGenerator
 
 from pathlib import Path

@@ -1,177 +1,65 @@
 # Autumn
 
-## Feauters
-[+] Class Based @REST
-[+] ASGI
-[+] startup/shutdown hooks
-[+] middlewares
-[+] @query, @body
-[+] Pydantic validation
-[+] @json_response
+<p align="center">
+    <img src="https://i.imgur.com/1bXTXQe.png" alt="Autumn logo" width="120" />
+</p>
 
-[+] Auto depdendency injection 
+<p align="center">
+    <strong>A modern ASGI web framework focused on typed controllers, dependency injection, and clean configuration.</strong>
+</p>
 
-[+] FileResponse
-[+] StreamFileResponse
-[+] WebSocket
-[+] Optional arguments in methods of controller
-[+] Path Parameter: {path:path}
-[+] Config Classes
-[+] Config Injections
+__Autumn__ is a Python web framework for building HTTP APIs and WebSocket applications with a small, explicit core. It leans on Python's type system instead of large decorator stacks: route parameters are typed, request bodies are inferred from Pydantic models, dependencies are injected from signatures, and responses can be serialized automatically.
 
-[+] Class based returns
-[+] Cors
-[+] Accept based exception return type
+If you want class-based controllers, typed configuration, built-in dependency injection, OpenAPI/Dependencies docs generation, and CORS support, Autumn is built for that style.
 
-[+] OpenApi
-- [+] Builder
-- [+] Viewer
-[+] Docstring Parser
-[+] Rework exceptions screen
+## Highlights
+- ASGI-first application object that works with standard ASGI servers such as `uvicorn`
+- Class-based REST controllers with typed path parameters like `{id:int}` and `{file:path}`
+- Signature-driven dependency injection with `@service` and `@leaf`
+- Automatic request body validation from Pydantic annotations
+- Automatic JSON serialization for Pydantic return values
+- Built-in configuration system with environment, JSON, and YAML sources
+- Built-in configs for application settings, CORS, and WebSocket tuning
+- OpenAPI and dependencies documentation generation with built-in viewer
+- Middleware hooks, lifespan hooks, file responses, redirects, and streaming
+- WebSocket routes with dependency injection support
 
-[] Imports Customization
-[] Tests
-[] Framework Documentation
-[] PyPi pipline
+## Why Autumn
+__Autumn__ tries to keep the ergonomic parts of modern Python frameworks while staying direct:
+- Controllers are just Python classes.
+- Dependencies come from constructor or method signatures.
+- Request bodies are inferred from type annotations instead of extra decorators.
+- Configs are plain Python classes with typed fields.
+- The framework stays close to raw ASGI concepts when you need to drop lower.
 
-[] testing
-[] Auth
+That makes the happy path concise, while still keeping the codebase readable when the application grows.
 
-[] Static
-[] Resources
+## Philosophy
 
-[] repo by names
-[] ORM/Models
+__Autumn__ favors:
 
-[] Database/Cache/Logging/Queue providers
+- strong typing over implicit magic
+- signatures over decorator-heavy ceremony
+- built-in primitives over mandatory third-party integration
+- readable application structure over framework cleverness
 
+The goal is to make small apps pleasant and larger apps maintainable.
 
-services.yaml
-service:
-    name: test
-    resolved:
-        - 1
-        - 2
-        - 3
-
-@env
-@yaml
-@json
-
-@yaml('./services')
-class ServiceConfig(Config):
-    service_name: Alias['service.name', str]
-    resolved: Alias['service.resolved', List[int]] # == [1, 2, 3]
-
-# Project
-| app/
-| | services/
-| | controllers/
-| | | schemas/
-| | repositories/
-| | | models/
-| | | | user.py
-| | | users.py
-| database
-| | migrations
-| | seeders
-| static
-| | resources
-| | templates
-| logs/
-| app.py
-
-# Example
-```python
-from autumn import Autumn, REST, get, post, Request, JSONResponse, query, HTMLResponse, dependency, service
-
-from pydantic import BaseModel, Field
-from typing import Optional
-
-app = Autumn()
-
-class DBClient:
-    def __init__(self, dsn: str):
-        self.dsn = dsn
-
-    def get_dsn(self) -> str:
-        return self.dsn
-
-@dependency
-async def db() -> DBClient:
-    return DBClient(dsn = 'https://google.com')
-
-@service
-class UserService:
-    def __init__(self, db: DBClient):
-        self.db = db
-
-    def get_db_dsn(self) -> str:
-        return self.db.get_dsn()
-        
-
-class UserSchema(BaseModel):
-    name: str = Field(..., min_length=4, max_length=10)
-    age: int = Field(..., ge=13, le=150)
-    is_male: Optional[bool] = True
-
-
-@app.startup
-async def connect_to_db():
-    print('Connecting Database')
-
-
-@app.shutdown
-async def disconnect_to_db():
-    print('Disconnecting Database')
-
-
-@app.middleware.before
-async def log_request(request, call_next):
-    print(">> Request received:", request.method, request.path)
-    return await call_next(request)
-
-
-@app.middleware.before(path='/users/current/{name:str}', method='GET')
-async def test(request, call_next):
-    print("TEST")
-    return await call_next(request)
-
-
-@app.middleware.after(path='/users/test', method='POST')
-async def log_response(request, call_next):
-    response = await call_next(request)
-    print("<< Response sent:", response.status)
-    return response
-
-
-@REST(prefix='/users')
-class UserController:
-    def __init__(self, users: UserService):
-        self.users = users
-
-    @get('/{id:int}')
-    @post('/{id:int}')
-    async def get_users(self, request: Request, id: str):
-        return JSONResponse({'id': self.users.get_db_dsn()})
-
-    @get('/')
-    @query.integer('page', default=10)
-    async def search(self, request: Request):
-        page = request.query.page
-
-        return JSONResponse({'page': page})
-
-    @post('/test')
-    async def create_user(self, request: Request, user: UserSchema):
-        return JSONResponse({'ok': True, 'user': user.model_dump(mode='json')})
-
-    @get('/current/{name:str}')
-    async def current_name(self, request: Request, name: str):
-        return HTMLResponse(name)
-
-    @get('/test_json_response/{name:str}')
-    async def get_test_user(self, request: Request, name: str) -> UserSchema:
-        return UserSchema(name=name, age=15)
-
+## Author
 ```
+     _      _  _               _ _   
+  __| | ___| || |   ___  _   _| | |_ 
+ / _` |/ _ \ || |_ / _ \| | | | | __|
+| (_| |  __/__   _| (_) | |_| | | |_ 
+ \__,_|\___|  |_|  \___/ \__,_|_|\__|
+```
+
+## __Thank you a lot!__
+
+<br>
+
+## How to reach me
+<a href="https://t.me/kayra_dev">
+    <img src="https://img.shields.io/badge/-Telegram-informational?style=for-the-badge&logo=telegram" alt="Telegram Badge" height="30" />
+</a>
+<img src="https://img.shields.io/badge/-kayra.dist@gmail.com-informational?style=for-the-badge&logo=gmail" alt="Gmail Badge" height="30" />

@@ -138,6 +138,12 @@ def ensure_builtin_configurations_registered() -> None:
 
     from autumn.core.configuration import builtin as _builtin
 
+    for builtin_name in ('CORSConfiguration', 'ApplicationConfiguration', 'WebsocketConfiguration'):
+        builtin_class = getattr(_builtin, builtin_name, None)
+
+        if builtin_class is not None:
+            CONFIG_REGISTRY.add(builtin_class)
+
     BUILTIN_CONFIGURATIONS_IMPORTED = True
 
 
@@ -171,3 +177,9 @@ def get_registered_configs() -> List[Type[Configuration]]:
     ensure_builtin_configurations_registered()
     
     return _resolve_effective_configurations(list(CONFIG_REGISTRY))
+
+def reset_configuration_registry() -> None:
+    global CONFIG_REGISTRY, BUILTIN_CONFIGURATIONS_IMPORTED
+
+    CONFIG_REGISTRY.clear()
+    BUILTIN_CONFIGURATIONS_IMPORTED = False

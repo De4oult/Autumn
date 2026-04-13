@@ -33,3 +33,7 @@ source = 'vcs'
 [tool.hatch.version.raw-options]
 tag_regex = '^(?:v)?(?P<version>\\d+\\.\\d+\\.\\d+.*)$'
 search_parent_directories = true
+
+[tool.pytest.ini_options]
+testpaths = ['tests']
+pythonpath = ['source']

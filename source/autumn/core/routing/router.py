@@ -97,6 +97,9 @@ class Router:
     def __init__(self):
         self.routes: list[Route] = []
 
+    def reset(self) -> None:
+        self.routes.clear()
+        
     def add_route(self, method: str, path: str, handler: Callable) -> None:
         self.routes.append(Route(method, path, handler))
 

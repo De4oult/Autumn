@@ -446,9 +446,24 @@ class Autumn:
                 'headers' : response.headers_as_list(),
             })
 
+            if hasattr(response, 'body_iterate') and callable(getattr(response, 'body_iterate')):
+                async for chunk in response.body_iterate():
+                    await send({
+                        'type'      : 'http.response.body',
+                        'body'      : chunk,
+                        'more_body' : True
+                    })
+
+                await send({
+                    'type'      : 'http.response.body',
+                    'body'      : b'',
+                    'more_body' : False
+                })
+                return
+
             await send({
                 'type'      : 'http.response.body',
-                'body'      : b'',
+                'body'      : response.body.encode('utf-8') if isinstance(response.body, str) else response.body,
                 'more_body' : False
             })
             return
