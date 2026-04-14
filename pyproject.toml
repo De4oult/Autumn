@@ -36,6 +36,17 @@ fallback-version = '0.0.0'
 version_scheme = 'no-guess-dev'
 search_parent_directories = true
 
+[tool.hatch.build.targets.wheel]
+packages = ['source/autumn']
+
+[tool.hatch.build.targets.sdist]
+include = [
+    '/source/autumn',
+    '/README.md',
+    '/pyproject.toml',
+    '/tests'
+]
+
 [tool.pytest.ini_options]
 testpaths = ['tests']
 pythonpath = ['source']
