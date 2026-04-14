@@ -34,6 +34,16 @@ __Autumn__ tries to keep the ergonomic parts of modern Python frameworks while s
 
 That makes the happy path concise, while still keeping the codebase readable when the application grows.
 
+## Benchmarks
+| Framework   | RPS   | Latency (ms) |
+| ----------- | ----- | ------------ |
+| __Autumn__* | 1970  | 50.25        |
+| FastAPI     | 3161  | 31.17        |
+| Flask       | 1228  | 2743.86      |
+
+___\* Autumn__ is under active development, and performance will continue to improve as the framework evolves._
+
+
 ## Philosophy
 
 __Autumn__ favors:
