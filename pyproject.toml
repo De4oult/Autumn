@@ -3,7 +3,7 @@ requires = ['hatchling>=1.21', 'hatch-vcs>=0.4']
 build-backend = 'hatchling.build'
 
 [project]
-name = 'Autumn'
+name = 'autumn-framework'
 description = 'Modern web-framework'
 readme = 'README.md'
 requires-python = '>=3.12'

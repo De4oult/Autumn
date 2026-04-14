@@ -219,3 +219,4 @@ source/test.py
 .autumn
 app/
 source/testconfig.json
+benchmarks/
