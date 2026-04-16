@@ -1,7 +1,7 @@
 from typing import Union, Any, Optional, Dict, List, Tuple, AsyncIterator
 from pydantic import BaseModel
 from pathlib import Path
-from orjson import dumps, OPT_INDENT_2
+from orjson import dumps
 from asyncio import to_thread
 
 import mimetypes
@@ -18,6 +18,19 @@ class Response:
         self.status: int = status
         self.content_type: str = content_type
         self.headers: Dict[str, str] = headers or {}
+
+    @property
+    def text(self) -> str:
+        if isinstance(self.body, bytes):
+            return self.body.decode('utf-8', errors = 'ignore')
+
+        return self.body
+
+    def body_as_bytes(self) -> bytes:
+        if isinstance(self.body, str):
+            return self.body.encode('utf-8')
+
+        return self.body
 
     def headers_as_list(self) -> List[Tuple[bytes, bytes]]:
         encoded_headers: List[Tuple[bytes, bytes]] = [
@@ -41,7 +54,7 @@ class JSONResponse(Response):
         serialized = self.serialize(body)
 
         super().__init__(
-            body         = dumps(serialized, option = OPT_INDENT_2).decode(),
+            body         = dumps(serialized),
             status       = status,
             content_type = 'application/json',
             headers      = headers or {}

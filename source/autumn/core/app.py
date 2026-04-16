@@ -1,14 +1,14 @@
 from autumn.core.websocket.websocket import WebSocket, WebSocketDisconnect
 from autumn.core.configuration.builtin import CORSConfiguration
+from autumn.core.configuration.configuration import Configuration, get_registered_configs
 from autumn.core.dependencies.container import Container, ExecutionContext
-from autumn.core.configuration.configuration import get_registered_configs
 from autumn.core.introspection import value_contains_pydantic_model
 from autumn.core.middleware.manager import MiddlewareManager
 from autumn.core.response.exception import HTTPException
 from autumn.core.response.response import JSONResponse, Response
 from autumn.core.dependencies.scope import Scope
 from autumn.core.request.request import Request
-from autumn.core.routing.router import router
+from autumn.core.routing.router import Router
 
 from typing import Callable, Optional
 from types import SimpleNamespace
@@ -16,6 +16,7 @@ from colorama import Fore
 from enum import Enum
 
 import asyncio
+import inspect
 import time
 
 class Environment(str, Enum):
@@ -31,7 +32,7 @@ class Autumn:
         self.description: Optional[str] = description
         self.environment: Environment = environment
 
-        self.router = router
+        self.router = Router()
         
         self.startup_hooks: list[Callable] = []
         self.shutdown_hooks: list[Callable] = []
@@ -39,10 +40,221 @@ class Autumn:
         self.middleware = MiddlewareManager()
         self.container = Container()
         self.__cors_configuration: Optional[CORSConfiguration] = None
+        self.__http_handler_cache: dict[tuple[type, str], Callable] = {}
+        self.__websocket_handler_cache: dict[tuple[type, str], Callable] = {}
+        self.__controllers: list[type] = []
+        self.__route_functions: list[Callable] = []
+        self.__dependency_functions: list[Callable] = []
+        self.__configuration_classes: list[type[Configuration]] = []
+        self.__service_classes: list[type] = []
 
         self.__providers_synced: bool = False
 
         self.__resolve_base_routes()
+
+    @staticmethod
+    def __append_unique(collection: list, item) -> bool:
+        if item in collection:
+            return False
+
+        collection.append(item)
+        return True
+
+    @staticmethod
+    def __normalize_route_path(path: str) -> str:
+        value = str(path or '/').strip()
+
+        if not value:
+            return '/'
+
+        if not value.startswith('/'):
+            value = '/' + value
+
+        return value
+
+    @classmethod
+    def __join_paths(cls, prefix: str, path: str) -> str:
+        normalized_prefix = '' if prefix == '/' else cls.__normalize_route_path(prefix).rstrip('/')
+        normalized_path = cls.__normalize_route_path(path)
+
+        if not normalized_prefix:
+            return normalized_path
+
+        if normalized_path == '/':
+            return normalized_prefix or '/'
+
+        return normalized_prefix + normalized_path
+
+    def __register_routes_for_controller(self, controller_class: type) -> None:
+        prefix = getattr(controller_class, '__autumn_prefix__', '')
+
+        for name, attribute in controller_class.__dict__.items():
+            routes = getattr(attribute, '__routes__', None)
+
+            if not routes:
+                continue
+
+            for route in routes:
+                full_path = self.__join_paths(prefix, route.get('path', '/'))
+                method = route.get('method', 'GET')
+
+                if method == 'WS':
+                    self.router.add_websocket_route(full_path, (controller_class, name))
+                else:
+                    self.router.add_route(method, full_path, (controller_class, name))
+
+    def __register_routes_for_function(self, func: Callable) -> None:
+        routes = getattr(func, '__routes__', None) or []
+
+        for route in routes:
+            path = self.__normalize_route_path(route.get('path', '/'))
+            method = route.get('method', 'GET')
+
+            if method == 'WS':
+                self.router.add_websocket_route(path, func)
+            else:
+                self.router.add_route(method, path, func)
+
+    def include(self, *definitions) -> 'Autumn':
+        for definition in definitions:
+            if definition is None:
+                continue
+
+            if isinstance(definition, (list, tuple, set, frozenset)):
+                self.include(*definition)
+                continue
+
+            if inspect.isclass(definition):
+                if issubclass(definition, Configuration):
+                    if self.__append_unique(self.__configuration_classes, definition):
+                        self.__providers_synced = False
+                    continue
+
+                if getattr(definition, '__autumn_controller__', False):
+                    if self.__append_unique(self.__controllers, definition):
+                        self.__register_routes_for_controller(definition)
+                    continue
+
+                provider_meta = getattr(definition, '__autumn_provider__', None)
+
+                if provider_meta and provider_meta[0] == 'class':
+                    self.__append_unique(self.__service_classes, definition)
+                    continue
+
+            if callable(definition):
+                routes = getattr(definition, '__routes__', None)
+
+                if routes:
+                    if self.__append_unique(self.__route_functions, definition):
+                        self.__register_routes_for_function(definition)
+                    continue
+
+                provider_meta = getattr(definition, '__autumn_provider__', None)
+
+                if provider_meta and provider_meta[0] == 'func':
+                    if self.__append_unique(self.__dependency_functions, definition):
+                        self.__providers_synced = False
+                    continue
+
+        return self
+
+    def rest(self, __cls = None, *, prefix: str = '') -> Callable:
+        from autumn.core.routing.decorators import REST as rest_decorator
+
+        def decorator(controller_class: type) -> type:
+            controller_class = rest_decorator(prefix = prefix)(controller_class)
+
+            self.include(controller_class)
+
+            return controller_class
+
+        return decorator if __cls is None else decorator(__cls)
+
+    def service(self, __cls = None, *, scope: Scope = Scope.APP):
+        from autumn.core.dependencies.decorators import service as service_decorator
+
+        def decorator(cls):
+            cls = service_decorator(scope = scope)(cls)
+            self.include(cls)
+
+            return cls
+
+        return decorator if __cls is None else decorator(__cls)
+
+    def leaf(self, _func = None, *, scope: Scope = Scope.APP):
+        from autumn.core.dependencies.decorators import leaf as leaf_decorator
+
+        def decorator(func):
+            func = leaf_decorator(scope = scope)(func)
+            self.include(func)
+
+            return func
+
+        return decorator if _func is None else decorator(_func)
+
+    def config(self, __cls = None):
+        def decorator(cls):
+            self.include(cls)
+
+            return cls
+
+        return decorator if __cls is None else decorator(__cls)
+
+    configuration = config
+
+    def route(self, method: str, path_or_func = '/') -> Callable:
+        from autumn.core.routing.decorators import route as route_decorator
+
+        if callable(path_or_func):
+            func = path_or_func
+            path = '/'
+            func = route_decorator(method, path)(func)
+            self.include(func)
+
+            return func
+
+        path = path_or_func
+
+        def decorator(func: Callable) -> Callable:
+            func = route_decorator(method, path)(func)
+            self.include(func)
+            
+            return func
+
+        return decorator
+
+    def get(self, path_or_func = '/') -> Callable:
+        return self.route('GET', path_or_func)
+
+    def post(self, path_or_func = '/') -> Callable:
+        return self.route('POST', path_or_func)
+
+    def put(self, path_or_func = '/') -> Callable:
+        return self.route('PUT', path_or_func)
+
+    def patch(self, path_or_func = '/') -> Callable:
+        return self.route('PATCH', path_or_func)
+
+    def delete(self, path_or_func = '/') -> Callable:
+        return self.route('DELETE', path_or_func)
+
+    def websocket(self, path_or_func = '/') -> Callable:
+        return self.route('WS', path_or_func)
+
+    def get_registered_configs(self) -> list[type[Configuration]]:
+        return get_registered_configs(self.__configuration_classes)
+
+    def get_registered_dependency_functions(self) -> list[Callable]:
+        return list(self.__dependency_functions)
+
+    def get_registered_controller_classes(self) -> list[type]:
+        return list(self.__controllers)
+
+    def get_registered_route_functions(self) -> list[Callable]:
+        return list(self.__route_functions)
+
+    def get_registered_service_classes(self) -> list[type]:
+        return list(self.__service_classes)
 
     def __resolve_base_routes(self) -> None:
         from autumn.core.routing.base import favicon_route
@@ -70,13 +282,11 @@ class Autumn:
     def __sync_providers(self):
         if self.__providers_synced:
             return
-        
-        from autumn.core.dependencies.registry import DEPENDENCY_FUNCTIONS
 
-        for func in DEPENDENCY_FUNCTIONS:
+        for func in self.__dependency_functions:
             self.container.register_dependency_function(func)
 
-        for configuration_class in get_registered_configs():
+        for configuration_class in self.get_registered_configs():
             configuration = configuration_class.build()
 
             self.container.register_value(
@@ -106,6 +316,95 @@ class Autumn:
             return JSONResponse(result)
 
         raise TypeError(f'Handler returned unsupported result type: {type(result).__name__}')
+
+    @staticmethod
+    def __copy_handler_metadata(source: Callable, target: Callable) -> Callable:
+        for attribute in ('__query_parameters__', '__body_schema__', '__json_response__', '__response_model__'):
+            if hasattr(source, attribute):
+                setattr(target, attribute, getattr(source, attribute))
+
+        return target
+
+    def __get_http_handler_callable(self, handler: tuple[type, str]) -> Callable:
+        if handler in self.__http_handler_cache:
+            return self.__http_handler_cache[handler]
+
+        controller_class, method_name = handler
+        original_method = getattr(controller_class, method_name)
+
+        async def endpoint(request: Request, **path_parameters):
+            context = getattr(request, '_autumn_execution_context', None)
+
+            controller = await self.container.resolve(controller_class, context)
+            method = getattr(controller, method_name)
+
+            return await self.container.call(
+                method,
+                context = context,
+                provided_kwargs = {
+                    **path_parameters,
+                    'request': request
+                }
+            )
+
+        cached = self.__copy_handler_metadata(original_method, endpoint)
+        self.__http_handler_cache[handler] = cached
+
+        return cached
+
+    def __get_websocket_handler_callable(self, handler: tuple[type, str]) -> Callable:
+        if handler in self.__websocket_handler_cache:
+            return self.__websocket_handler_cache[handler]
+
+        controller_class, method_name = handler
+
+        async def endpoint(websocket: WebSocket, **path_parameters):
+            context = getattr(websocket, '_autumn_execution_context', None)
+
+            controller = await self.container.resolve(controller_class, context)
+            method = getattr(controller, method_name)
+
+            return await self.container.call(
+                method,
+                context = context,
+                provided_kwargs = {
+                    **path_parameters,
+                    'websocket': websocket
+                }
+            )
+
+        self.__websocket_handler_cache[handler] = endpoint
+        return endpoint
+
+    @staticmethod
+    async def __send_response(send, response: Response) -> None:
+        await send({
+            'type'    : 'http.response.start',
+            'status'  : response.status,
+            'headers' : response.headers_as_list(),
+        })
+
+        if hasattr(response, 'body_iterate') and callable(getattr(response, 'body_iterate')):
+            async for chunk in response.body_iterate():
+                await send({
+                    'type'      : 'http.response.body',
+                    'body'      : chunk,
+                    'more_body' : True
+                })
+
+            await send({
+                'type'      : 'http.response.body',
+                'body'      : b'',
+                'more_body' : False
+            })
+            
+            return
+
+        await send({
+            'type'      : 'http.response.body',
+            'body'      : response.body_as_bytes(),
+            'more_body' : False
+        })
 
     @staticmethod
     def __normalize_header_values(values) -> list[str]:
@@ -356,6 +655,7 @@ class Autumn:
 		
         if scope['type'] == 'websocket':
             websocket: WebSocket = WebSocket(scope, receive, send)
+            websocket.app = self
 
             match = self.router.match_websocket(scope['path'])
 
@@ -364,28 +664,15 @@ class Autumn:
                     await websocket.close(code = 1000)
                     return
                 
-                handler, parameters = match
+                handler = match.handler
+                parameters = match.parameters
 
                 context = ExecutionContext()
                 context.values[WebSocket] = websocket
+                websocket._autumn_execution_context = context
 
                 if isinstance(handler, tuple) and (len(handler) == 2) and isinstance(handler[1], str):
-                    controller_class, method_name = handler
-
-                    async def endpoint(websocket: WebSocket, **path_parameters):
-                        controller = await self.container.resolve(controller_class, context)
-                        method = getattr(controller, method_name)
-
-                        return await self.container.call(
-                            method,
-                            context         = context,
-                            provided_kwargs = {
-                                **path_parameters,
-                                'websocket': websocket
-                            }
-                        )
-
-                    handler_callable = endpoint
+                    handler_callable = self.__get_websocket_handler_callable(handler)
 
                 else:
                     handler_callable = handler
@@ -440,32 +727,7 @@ class Autumn:
                     details = str(error)
                 ).to_response(request)
 
-            await send({
-                'type'    : 'http.response.start',
-                'status'  : response.status,
-                'headers' : response.headers_as_list(),
-            })
-
-            if hasattr(response, 'body_iterate') and callable(getattr(response, 'body_iterate')):
-                async for chunk in response.body_iterate():
-                    await send({
-                        'type'      : 'http.response.body',
-                        'body'      : chunk,
-                        'more_body' : True
-                    })
-
-                await send({
-                    'type'      : 'http.response.body',
-                    'body'      : b'',
-                    'more_body' : False
-                })
-                return
-
-            await send({
-                'type'      : 'http.response.body',
-                'body'      : response.body.encode('utf-8') if isinstance(response.body, str) else response.body,
-                'more_body' : False
-            })
+            await self.__send_response(send, response)
             return
 
         match = self.router.match(scope['method'], scope['path'])
@@ -477,34 +739,15 @@ class Autumn:
                     details = f'Route {scope.get('path')} not found'
                 )
         
-            handler, parameters = match
+            handler = match.handler
+            parameters = match.parameters
 
             context = ExecutionContext()
             context.values[Request] = request
+            request._autumn_execution_context = context
 
             if isinstance(handler, tuple) and (len(handler) == 2) and isinstance(handler[1], str):
-                controller_class, method_name = handler
-
-                async def endpoint(request: Request, **path_parameters):
-                    controller = await self.container.resolve(controller_class, context)
-                    method = getattr(controller, method_name)
-
-                    return await self.container.call(
-                        method,
-                        context         = context,
-                        provided_kwargs = {
-                            **path_parameters,
-                            'request': request
-                        }
-                    )
-                
-                original_method = getattr(controller_class, method_name)
-
-                for attribute in ('__query_parameters__', '__body_schema__', '__json_response__', '__response_model__'):
-                    if hasattr(original_method, attribute):
-                        setattr(endpoint, attribute, getattr(original_method, attribute))
-                    
-                handler_callable = endpoint
+                handler_callable = self.__get_http_handler_callable(handler)
 
             else:
                 handler_callable = handler
@@ -520,9 +763,9 @@ class Autumn:
                     }
                 )
             
-            wrapped_handler = await self.middleware.wrap(
+            wrapped_handler = self.middleware.wrap(
                 invoke, 
-                scope['path'], 
+                match.route.path_template,
                 scope['method']
             )
 
@@ -585,29 +828,4 @@ class Autumn:
             self.__build_cors_headers(request)
         )
         
-        await send({
-            'type'    : 'http.response.start',
-            'status'  : response.status,
-            'headers' : response.headers_as_list(),
-        })
-
-        if hasattr(response, 'body_iterate') and callable(getattr(response, 'body_iterate')):
-            async for chunk in response.body_iterate():
-                await send({
-                    'type'      : 'http.response.body',
-                    'body'      : chunk,
-                    'more_body' : True
-                })
-            
-            await send({
-                'type'      : 'http.response.body',
-                'body'      : b'',
-                'more_body' : False
-            })
-            return
-
-        await send({
-            'type'      : 'http.response.body', 
-            'body'      : response.body.encode('utf-8') if isinstance(response.body, str) else response.body,
-            'more_body' : False
-        })
+        await self.__send_response(send, response)

@@ -22,7 +22,7 @@ class Request:
     
     def __parse_headers(self, raw_headers):
         return { 
-            key.decode(): value.decode() 
+            key.decode().lower(): value.decode()
             for key, value in raw_headers
         }
     
@@ -38,25 +38,25 @@ class Request:
 
     async def body(self) -> bytes:
         if self.__body is None:
-            body = b''
+            chunks: list[bytes] = []
 
             more_body = True
             
             while more_body:
                 message = await self.receive()
 
-                body += message.get('body', b'')
+                chunks.append(message.get('body', b''))
                 
                 more_body = message.get('more_body', False)
             
-            self.__body = body
+            self.__body = b''.join(chunks)
         
         return self.__body
 
     async def json(self) -> dict:
         raw: bytes = await self.body()
 
-        return loads(raw.decode('utf-8'))
+        return loads(raw)
 
     def header(self, name: str) -> Optional[str]:
         return self.headers.get(name.lower())

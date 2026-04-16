@@ -4,8 +4,6 @@ from typing import Any, Callable, Dict, List, Optional, Type, Tuple, get_origin,
 import inspect
 import re
 
-from autumn.core.configuration.configuration import get_registered_configs
-from autumn.core.dependencies.registry import SERVICE_CLASSES, DEPENDENCY_FUNCTIONS
 from autumn.core.dependencies.scope import Scope
 
 
@@ -192,23 +190,33 @@ def _configuration_fields(config_class: Type[Any]) -> List[dict]:
     return fields
 
 
+def _is_builtin_configuration_for_docs(config_class: Type[Any]) -> bool:
+    return bool(getattr(config_class, '__dict__', {}).get('__autumn_builtin_config__', False))
+
+
 class DependenciesDocumentationGenerator:
     def generate(self, app: Any) -> dict:
+        dependency_functions = list(getattr(app, 'get_registered_dependency_functions', lambda: [])())
+        service_classes = list(getattr(app, 'get_registered_service_classes', lambda: [])())
+        config_classes = [
+            config_class
+            for config_class in list(getattr(app, 'get_registered_configs', lambda: [])())
+            if not _is_builtin_configuration_for_docs(config_class)
+        ]
         leaf_by_key: Dict[Any, Callable[..., Any]] = {}
 
-        for function in DEPENDENCY_FUNCTIONS:
+        for function in dependency_functions:
             key = _provider_key_for_leaf(function)
 
             if key is not None:
                 leaf_by_key[key] = function
 
-        config_classes = list(get_registered_configs())
         providers: Dict[Any, dict] = {}
         services_out: List[dict] = []
         leaf_out: List[dict] = []
         configurations_out: List[dict] = []
 
-        for cls in SERVICE_CLASSES:
+        for cls in service_classes:
             scope = getattr(cls, '__autumn_scope__', Scope.APP)
 
             scope_value = _scope_value(scope)
@@ -255,7 +263,7 @@ class DependenciesDocumentationGenerator:
                 'provides'  : provides
             }
 
-        for function in DEPENDENCY_FUNCTIONS:
+        for function in dependency_functions:
             ret = _provider_key_for_leaf(function)
 
             scope = getattr(function, '__autumn_scope__', Scope.APP)
@@ -283,7 +291,7 @@ class DependenciesDocumentationGenerator:
                     'provides'  : provides
                 }
 
-        for function in DEPENDENCY_FUNCTIONS:
+        for function in dependency_functions:
             ret = _provider_key_for_leaf(function)
 
             scope = getattr(function, '__autumn_scope__', Scope.APP)
@@ -346,7 +354,7 @@ class DependenciesDocumentationGenerator:
                 'fields'       : _configuration_fields(config_class)
             })
 
-        for cls in SERVICE_CLASSES:
+        for cls in service_classes:
             scope = getattr(cls, '__autumn_scope__', Scope.APP)
             summary, body = _docstring_parts(cls)
 
@@ -430,7 +438,7 @@ class DependenciesDocumentationGenerator:
 
             dependencies: List[Any] = []
 
-            if inspect.isclass(_type) and _type in SERVICE_CLASSES:
+            if inspect.isclass(_type) and _type in service_classes:
                 dependencies = _callable_deps(_type.__init__, skip_self = True)
 
             elif _type in leaf_by_key:
@@ -453,7 +461,7 @@ class DependenciesDocumentationGenerator:
 
         roots = []
 
-        for cls in SERVICE_CLASSES:
+        for cls in service_classes:
             roots.append(edges_for_type(
                 cls, 
                 visited = set(), 

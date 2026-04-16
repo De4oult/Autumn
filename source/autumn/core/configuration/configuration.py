@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Type, Set, get_origin, get_args, Annotated
+from typing import Any, Dict, Iterable, List, Type, get_origin, get_args, Annotated
 
 from autumn.core.configuration.alias import Alias
 from autumn.core.configuration.source import ConfigurationSource, SourceChain
@@ -8,8 +8,6 @@ from autumn.core.configuration.errors import AutumnConfigValueMissing, AutumnCon
 from autumn.core.configuration.casting import cast_value, MISSING
 from autumn.core.configuration.maple import AliasMeta
 
-CONFIG_REGISTRY: Set[Type['Configuration']] = set()
-BUILTIN_CONFIGURATIONS_IMPORTED = False
 INTERNAL_FIELDS = {
     '__config_sources__',
     '__fields__',
@@ -65,9 +63,6 @@ class ConfigurationMeta(type):
         cls.__fields__ = fields
         cls.__field_types__ = field_types
         cls.__aliases__ = field_aliases
-
-        if name != 'Configuration':
-            CONFIG_REGISTRY.add(cls)
 
         return cls
 
@@ -129,22 +124,18 @@ class Configuration(metaclass=ConfigurationMeta):
 
         return cls(**values)
 
-
-def ensure_builtin_configurations_registered() -> None:
-    global BUILTIN_CONFIGURATIONS_IMPORTED
-
-    if BUILTIN_CONFIGURATIONS_IMPORTED:
-        return
-
+def get_builtin_configurations() -> List[Type[Configuration]]:
     from autumn.core.configuration import builtin as _builtin
+
+    builtin_configurations: List[Type[Configuration]] = []
 
     for builtin_name in ('CORSConfiguration', 'ApplicationConfiguration', 'WebsocketConfiguration'):
         builtin_class = getattr(_builtin, builtin_name, None)
 
         if builtin_class is not None:
-            CONFIG_REGISTRY.add(builtin_class)
+            builtin_configurations.append(builtin_class)
 
-    BUILTIN_CONFIGURATIONS_IMPORTED = True
+    return builtin_configurations
 
 
 def _resolve_effective_configurations(configs: List[Type[Configuration]]) -> List[Type[Configuration]]:
@@ -173,13 +164,13 @@ def _resolve_effective_configurations(configs: List[Type[Configuration]]) -> Lis
     )
 
 
-def get_registered_configs() -> List[Type[Configuration]]:
-    ensure_builtin_configurations_registered()
-    
-    return _resolve_effective_configurations(list(CONFIG_REGISTRY))
+def get_registered_configs(configs: Iterable[Type[Configuration]] | None = None) -> List[Type[Configuration]]:
+    collected = list(get_builtin_configurations())
+
+    if configs is not None:
+        collected.extend(configs)
+
+    return _resolve_effective_configurations(collected)
 
 def reset_configuration_registry() -> None:
-    global CONFIG_REGISTRY, BUILTIN_CONFIGURATIONS_IMPORTED
-
-    CONFIG_REGISTRY.clear()
-    BUILTIN_CONFIGURATIONS_IMPORTED = False
+    return None

@@ -28,6 +28,25 @@ class ExecutionContext:
     cache: Dict[Type[Any], Any] = field(default_factory = dict)
     values: Dict[Type[Any], Any] = field(default_factory = dict)
 
+
+@dataclass(frozen = True)
+class DependencyParameter:
+    name: str
+    dependency_type: Any
+
+
+@dataclass(frozen = True)
+class CallMetadata:
+    parameters: tuple[tuple[str, inspect.Parameter], ...]
+    dependency_parameters: tuple[DependencyParameter, ...]
+    has_var_kwargs: bool
+    body_parameter: Any
+
+
+@dataclass(frozen = True)
+class InjectMetadata:
+    dependency_parameters: tuple[DependencyParameter, ...]
+
 class BuiltinProvider:
     def __init__(self, key: Type[Any], scope: Scope):
         self.key = key
@@ -45,6 +64,10 @@ class Container:
     def __init__(self) -> None:
         self.__providers: Dict[Type[Any], Provider] = {}
         self.__app_cache: Dict[Type[Any], Any] = {}
+        
+        self.__call_metadata_cache: Dict[tuple[Any, bool], CallMetadata] = {}
+        self.__inject_metadata_cache: Dict[tuple[Any, bool], InjectMetadata] = {}
+        self.__type_adapter_cache: Dict[Any, TypeAdapter] = {}
 
         self.__providers[Request] = Provider(
             kind   = 'builtin',
@@ -57,6 +80,120 @@ class Container:
             target = BuiltinProvider(WebSocket, Scope.WEBSOCKET),
             scope  = Scope.WEBSOCKET
         )
+
+    @staticmethod
+    def __callable_cache_key(callable: Callable[..., Any]) -> Any:
+        if inspect.ismethod(callable):
+            return callable.__func__
+
+        return callable
+
+    def __invalidate_callable_caches(self) -> None:
+        self.__call_metadata_cache.clear()
+        self.__inject_metadata_cache.clear()
+
+    def __get_call_metadata(self, func: Callable[..., Any], *, skip_self: bool = False) -> CallMetadata:
+        cache_key = (self.__callable_cache_key(func), skip_self)
+
+        if cache_key in self.__call_metadata_cache:
+            return self.__call_metadata_cache[cache_key]
+
+        signature = inspect.signature(func)
+        hints = get_type_hints(func)
+        body_parameter = get_declared_body_parameter(
+            func,
+            provided_kwargs = {},
+            skip_self = skip_self,
+            can_resolve_dependency = self.__can_resolve_dependency,
+            signature = signature,
+            hints = hints
+        )
+
+        parameters: list[tuple[str, inspect.Parameter]] = []
+        dependency_parameters: list[DependencyParameter] = []
+        has_var_kwargs = False
+
+        for name, parameter in signature.parameters.items():
+            if skip_self and name == 'self':
+                continue
+
+            if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+                has_var_kwargs = True
+                continue
+
+            if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
+                continue
+
+            parameters.append((name, parameter))
+
+            if body_parameter is not None and name == body_parameter.name:
+                continue
+
+            if name in hints:
+                dependency_parameters.append(
+                    DependencyParameter(
+                        name = name,
+                        dependency_type = hints[name]
+                    )
+                )
+
+        metadata = CallMetadata(
+            parameters = tuple(parameters),
+            dependency_parameters = tuple(dependency_parameters),
+            has_var_kwargs = has_var_kwargs,
+            body_parameter = body_parameter
+        )
+
+        self.__call_metadata_cache[cache_key] = metadata
+        return metadata
+
+    def __get_inject_metadata(self, callable: Callable[..., Any], *, skip_self: bool = False) -> InjectMetadata:
+        cache_key = (self.__callable_cache_key(callable), skip_self)
+
+        if cache_key in self.__inject_metadata_cache:
+            return self.__inject_metadata_cache[cache_key]
+
+        signature = inspect.signature(callable)
+        hints = get_type_hints(callable)
+        dependencies: list[DependencyParameter] = []
+
+        for name, parameter in signature.parameters.items():
+            if skip_self and name == 'self':
+                continue
+
+            if parameter.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                continue
+
+            if name not in hints:
+                continue
+
+            dependencies.append(
+                DependencyParameter(
+                    name = name,
+                    dependency_type = hints[name]
+                )
+            )
+
+        metadata = InjectMetadata(
+            dependency_parameters = tuple(dependencies)
+        )
+
+        self.__inject_metadata_cache[cache_key] = metadata
+        return metadata
+
+    def __get_type_adapter(self, annotation: Any) -> TypeAdapter:
+        try:
+            if annotation in self.__type_adapter_cache:
+                return self.__type_adapter_cache[annotation]
+
+            adapter = TypeAdapter(annotation)
+
+            self.__type_adapter_cache[annotation] = adapter
+
+            return adapter
+
+        except TypeError:
+            return TypeAdapter(annotation)
 
     # Registration
     def register_dependency_function(self, func: Callable[..., Any]):
@@ -72,6 +209,8 @@ class Container:
 
     def register(self, key: Type[Any], provider: Provider) -> Type[Any]:
         self.__providers[key] = provider
+        
+        self.__invalidate_callable_caches()
 
     def register_value(self, key: Type[Any], instance: Any, *, scope: Scope = Scope.APP) -> None:
         self.__providers[key] = Provider(
@@ -79,6 +218,8 @@ class Container:
             target = instance, 
             scope  = scope
         )
+
+        self.__invalidate_callable_caches()
 
     def __get_provider(self, key: type) -> Provider:
         if key in self.__providers:
@@ -127,17 +268,19 @@ class Container:
             ) from error
 
         try:
-            return TypeAdapter(parameter.annotation).validate_python(payload)
+            adapter = self.__get_type_adapter(parameter.annotation)
+
+            return adapter.validate_python(payload)
 
         except ValidationError as error:
             raise HTTPException(
-                status = 422,
+                status  = 422,
                 details = str(error)
             ) from error
 
         except Exception as error:
             raise HTTPException(
-                status = 400,
+                status  = 400,
                 details = f'Invalid request body: {str(error)}'
             ) from error
     
@@ -197,26 +340,16 @@ class Container:
         raise DependencyInjectionError(f'Unknown provider kind: {provider.kind}')
     
     async def __inject_kwargs(self, callable: Callable[..., Any], context: Optional[ExecutionContext], skip_self: bool = False) -> Dict[str, Any]:
-        signature = inspect.signature(callable)
-        hints = get_type_hints(callable)
-
         kwargs: Dict[str, Any] = {}
+        metadata = self.__get_inject_metadata(callable, skip_self = skip_self)
 
-        for name, _ in signature.parameters.items():
-            if skip_self and name == 'self':
-                continue
-
-            if name not in hints:
-                continue
-
-            dependency_type = hints[name]
-
+        for dependency in metadata.dependency_parameters:
             try:
-                kwargs[name] = await self.resolve(dependency_type, context)
+                kwargs[dependency.name] = await self.resolve(dependency.dependency_type, context)
 
             except (DependencyInjectionError, DependencyProviderError) as error:
                 raise DependencyInjectionError(
-                    f'Cannot resolve parameter \'{name}\' ({dependency_type}) for {callable}'
+                    f'Cannot resolve parameter \'{dependency.name}\' ({dependency.dependency_type}) for {callable}'
                 ) from error
 
         return kwargs
@@ -231,41 +364,22 @@ class Container:
     ) -> Any:
         provided_kwargs = provided_kwargs or {}
 
-        signature = inspect.signature(func)
-        hints = get_type_hints(func)
-
         kwargs: Dict[str, Any] = {}
-
-        has_var_kwargs = any(
-            parameter.kind == inspect.Parameter.VAR_KEYWORD
-            for parameter in signature.parameters.values()
-        )
-
-        try:
-            body_parameter = get_declared_body_parameter(
-                func,
-                provided_kwargs = provided_kwargs,
-                skip_self = skip_self,
-                can_resolve_dependency = self.__can_resolve_dependency
-            )
-
-        except RuntimeError as error:
-            raise DependencyInjectionError(str(error)) from error
+        metadata = self.__get_call_metadata(func, skip_self = skip_self)
 
         parsed_body = inspect.Parameter.empty
+        
+        dependency_map = {
+            dependency.name: dependency.dependency_type
+            for dependency in metadata.dependency_parameters
+        }
 
-        for name, parameter in signature.parameters.items():
-            if skip_self and name == 'self':
-                continue
-
-            if parameter.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
-                continue
-
+        for name, parameter in metadata.parameters:
             if name in provided_kwargs:
                 kwargs[name] = provided_kwargs[name]
                 continue
 
-            if body_parameter is not None and name == body_parameter.name:
+            if metadata.body_parameter is not None and name == metadata.body_parameter.name:
                 request = provided_kwargs.get('request')
 
                 if request is None and context is not None:
@@ -275,28 +389,26 @@ class Container:
                     raise DependencyInjectionError(f'Cannot resolve request body parameter \'{name}\' for {func} without Request')
 
                 if parsed_body is inspect.Parameter.empty:
-                    parsed_body = await self.__resolve_request_body(request, body_parameter)
+                    parsed_body = await self.__resolve_request_body(request, metadata.body_parameter)
 
                 kwargs[name] = parsed_body
                 
                 continue
 
-            if name in hints:
-                dependency_type = hints[name]
-
+            if name in dependency_map:
                 try:
-                    kwargs[name] = await self.resolve(dependency_type, context)
+                    kwargs[name] = await self.resolve(dependency_map[name], context)
                     continue
 
                 except (DependencyInjectionError, DependencyProviderError) as error:
                     raise DependencyInjectionError(
-                        f'Cannot resolve parameter \'{name}\' ({dependency_type}) for {func}'
+                        f'Cannot resolve parameter \'{name}\' ({dependency_map[name]}) for {func}'
                     ) from error
 
             if parameter.default is inspect.Parameter.empty:
                 raise DependencyInjectionError(f'Missing required argument \'{name}\' for {func}')
 
-        if has_var_kwargs:
+        if metadata.has_var_kwargs:
             for key, value in provided_kwargs.items():
                 if key in kwargs:
                     continue

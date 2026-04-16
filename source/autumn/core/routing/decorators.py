@@ -1,7 +1,6 @@
 from autumn.core.dependencies.scope import Scope
-from autumn.core.routing.router import router
 
-from typing import Callable
+from typing import Callable, Optional
 
 def REST(prefix: str = ''):
     def wrapper(__class):
@@ -13,19 +12,15 @@ def REST(prefix: str = ''):
 
         if not hasattr(__class, '__tag__'):
             setattr(__class, '__tag__', __class.__name__.removesuffix("Controller"))
-
-        for name, attribute in __class.__dict__.items():
-            if hasattr(attribute, '__routes__'):
-                for route in attribute.__routes__:
-                    full_path = prefix.rstrip('/') + route.get('path')
-
-                    router.add_route(route.get('method'), full_path, (__class, name))
+        
+        setattr(__class, '__autumn_controller__', True)
+        setattr(__class, '__autumn_prefix__', prefix)
 
         return __class
     
     return wrapper
 
-def route(method: str, path: str):
+def route(method: str, path: str = '/') -> Callable:
     def decorator(func):
         if not hasattr(func, '__routes__'):
             func.__routes__ = []
@@ -39,24 +34,27 @@ def route(method: str, path: str):
     
     return decorator
 
-def get(path: str) -> Callable:
-    return route('GET', path)
+def _method_decorator(method: str, arg: Optional[Callable | str] = None) -> Callable:
+    if callable(arg):
+        return route(method, '/')(arg)
 
-def post(path: str) -> Callable:
-    return route('POST', path)
+    path = '/' if arg is None else str(arg)
+    return route(method, path)
 
-def put(path: str) -> Callable:
-    return route('PUT', path)
+def get(arg: Optional[Callable | str] = None) -> Callable:
+    return _method_decorator('GET', arg)
 
-def patch(path: str) -> Callable:
-    return route('PATCH', path)
+def post(arg: Optional[Callable | str] = None) -> Callable:
+    return _method_decorator('POST', arg)
 
-def delete(path: str) -> Callable:
-    return route('DELETE', path)
+def put(arg: Optional[Callable | str] = None) -> Callable:
+    return _method_decorator('PUT', arg)
 
-def websocket(path: str) -> Callable:
-    def decorator(func: Callable) -> Callable:
-        router.add_websocket_route(path, func) 
-        return func
-    
-    return decorator
+def patch(arg: Optional[Callable | str] = None) -> Callable:
+    return _method_decorator('PATCH', arg)
+
+def delete(arg: Optional[Callable | str] = None) -> Callable:
+    return _method_decorator('DELETE', arg)
+
+def websocket(arg: Optional[Callable | str] = None) -> Callable:
+    return _method_decorator('WS', arg)
