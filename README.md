@@ -35,14 +35,29 @@ __Autumn__ tries to keep the ergonomic parts of modern Python frameworks while s
 That makes the happy path concise, while still keeping the codebase readable when the application grows.
 
 ## Benchmarks
-| Framework   | RPS   | Latency (ms) |
-| ----------- | ----- | ------------ |
-| __Autumn__* | 1970  | 50.25        |
-| FastAPI     | 3161  | 31.17        |
-| Flask       | 1228  | 2743.86      |
+Latest local benchmark run: `2026-04-17`
 
-___\* Autumn__ is under active development, and performance will continue to improve as the framework evolves._
+Environment:
+- Windows
+- Python `3.12`
+- `uvicorn --workers 1 --loop asyncio --http h11 --lifespan off`
+- Concurrency: `64`
+- Warmup: `2s`
+- Measurement duration: `5s`
 
+Average across `plaintext`, `json`, `path_parameter`, and `body` scenarios:
+
+| Framework   | Avg RPS | Avg P95 (ms) |
+| ----------- | ------: | -----------: |
+| Falcon      | 4471.53 | 16.66        |
+| __Autumn__  | 4006.67 | 17.38        |
+| FastAPI     | 3644.17 | 19.49        |
+| Flask       | 2149.76 | 33.06        |
+
+In this run, Autumn is:
+- `86.37%` faster than Flask on average
+- `9.95%` faster than FastAPI on average
+- `10.39%` slower than Falcon on average
 
 ## Philosophy
 
