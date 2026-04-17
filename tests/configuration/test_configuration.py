@@ -31,7 +31,7 @@ class ConfigurationTests(unittest.TestCase):
         class CustomCORSConfiguration(CORSConfiguration):
             allowed_origins = ['https://example.com']
 
-        configs = get_registered_configs()
+        configs = get_registered_configs([CustomCORSConfiguration])
 
         self.assertIn(CustomCORSConfiguration, configs)
         self.assertNotIn(CORSConfiguration, configs)

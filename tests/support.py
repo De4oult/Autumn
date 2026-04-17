@@ -45,19 +45,13 @@ def _ensure_test_environment() -> None:
 
 _ensure_test_environment()
 
-from autumn.core.configuration.configuration import reset_configuration_registry
-from autumn.core.dependencies.registry import DEPENDENCY_FUNCTIONS, SERVICE_CLASSES
 from autumn.core.request.request import Request
-from autumn.core.routing.router import router
 
 import asyncio
 
 
 def reset_framework_state() -> None:
-    router.reset()
-    reset_configuration_registry()
-    DEPENDENCY_FUNCTIONS.clear()
-    SERVICE_CLASSES.clear()
+    return None
 
 
 def make_scope(

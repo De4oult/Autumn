@@ -1,4 +1,5 @@
-from typing import Callable, Optional, List, Type, Any, Dict, Tuple
+from typing import Callable, Optional, List, Type, Any, Dict
+from dataclasses import dataclass
 from uuid import UUID
 
 import re
@@ -24,6 +25,9 @@ class Route:
         self.method = method.upper()
         self.path_template = path_template
         self.handler = handler
+        self.is_static = '{' not in self.path_template and '}' not in self.path_template
+        
+        self.static_path = Router.normalize_static_path(self.path_template) if self.is_static else None
         
         (
             self.pattern, 
@@ -72,7 +76,7 @@ class Route:
 
         return regex, parameters, parameters_types, parameters_types_names, openapi_path
     
-    def match(self, method: str, path: str) -> Optional[tuple[Callable, dict]]:
+    def match(self, method: str, path: str) -> Optional[tuple[Callable, dict[str, Any]]]:
         if self.method != method.upper():
             return None
         
@@ -92,33 +96,76 @@ class Route:
                 return None
 
         return self.handler, casted
+
+
+@dataclass(frozen = True)
+class RouteMatch:
+    route: Route
+    handler: Callable
+    parameters: Dict[str, Any]
         
 class Router:
     def __init__(self):
         self.routes: list[Route] = []
+        self.dynamic_routes_by_method: dict[str, list[Route]] = {}
+        self.static_routes_by_method: dict[str, dict[str, Route]] = {}
+
+    @staticmethod
+    def normalize_static_path(path: str) -> str:
+        value = str(path or '/')
+
+        if value == '/':
+            return '/'
+
+        return value.rstrip('/') or '/'
 
     def reset(self) -> None:
         self.routes.clear()
+        self.dynamic_routes_by_method.clear()
+        self.static_routes_by_method.clear()
         
     def add_route(self, method: str, path: str, handler: Callable) -> None:
-        self.routes.append(Route(method, path, handler))
+        route = Route(method, path, handler)
+
+        self.routes.append(route)
+
+        if route.is_static:
+            self.static_routes_by_method.setdefault(route.method, {})[route.static_path] = route
+            return
+
+        self.dynamic_routes_by_method.setdefault(route.method, []).append(route)
 
     def add_websocket_route(self, path: str, handler: Callable) -> None:
         self.add_route('WS', path, handler)
 
-    def match(self, method: str, path: str) -> Optional[tuple[Callable, dict]]:
-        for route in self.routes:
-            result = route.match(method, path)
+    def match(self, method: str, path: str) -> Optional[RouteMatch]:
+        method_key = method.upper()
+        static_path = self.normalize_static_path(path)
+        static_route = self.static_routes_by_method.get(method_key, {}).get(static_path)
 
-            if result:
-                return result
+        if static_route is not None:
+            return RouteMatch(
+                route      = static_route,
+                handler    = static_route.handler,
+                parameters = {}
+            )
+
+        for route in self.dynamic_routes_by_method.get(method_key, []):
+            result = route.match(method_key, path)
+
+            if result is not None:
+                _, parameters = result
+
+                return RouteMatch(
+                    route      = route,
+                    handler    = route.handler,
+                    parameters = parameters
+                )
             
         return None
     
-    def match_websocket(self, path: str) -> Optional[Tuple[Callable, Dict]]:
+    def match_websocket(self, path: str) -> Optional[RouteMatch]:
         return self.match('WS', path)
     
     def get_routes(self) -> List[Route]:
         return list(self.routes)
-    
-router = Router()

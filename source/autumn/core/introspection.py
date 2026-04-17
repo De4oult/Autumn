@@ -75,12 +75,15 @@ def get_declared_body_parameter(
     *,
     provided_kwargs: Optional[dict[str, Any]] = None,
     skip_self: bool = False,
-    can_resolve_dependency: Optional[Callable[[Any], bool]] = None
+    
+    can_resolve_dependency: Optional[Callable[[Any], bool]] = None,
+    signature: Optional[inspect.Signature] = None,
+    hints: Optional[dict[str, Any]] = None
 ) -> Optional[BodyParameter]:
     provided_kwargs = provided_kwargs or {}
 
-    signature = inspect.signature(callable)
-    hints = inspect.get_annotations(callable, eval_str = True)
+    signature = signature or inspect.signature(callable)
+    hints = hints or inspect.get_annotations(callable, eval_str = True)
 
     explicit_schema = getattr(callable, '__body_schema__', None)
     explicit_candidates: list[BodyParameter] = []

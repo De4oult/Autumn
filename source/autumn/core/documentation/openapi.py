@@ -5,11 +5,11 @@ from autumn.core.introspection import (
     annotation_is_response,
     get_declared_body_parameter
 )
+from autumn.core.serialization import annotation_supports_json_response, schema_for_annotation
 from typing import Callable, Any, Dict, List, Optional, Type
 from uuid import UUID
 
 from autumn.core.response.response import JSONResponse
-from pydantic import TypeAdapter
 
 PYTYPE_TO_SCHEMA = {
     int:   { 'type' : 'integer' },
@@ -254,7 +254,10 @@ class OpenAPIGenerator:
         auto_json_response = (
             returns is not inspect._empty
             and not annotation_is_response(returns)
-            and annotation_contains_pydantic_model(returns)
+            and (
+                annotation_contains_pydantic_model(returns)
+                or annotation_supports_json_response(returns)
+            )
         )
         response_model = self.__get_attribute_chain(method_object, '__response_model__', None) or returns
 
@@ -307,11 +310,12 @@ class OpenAPIGenerator:
         if annotation is None or annotation is inspect._empty:
             return None
 
-        try:
-            return TypeAdapter(annotation).json_schema()
+        schema = schema_for_annotation(annotation)
 
-        except Exception:
-            return None
+        if schema is not None:
+            return schema
+
+        return None
 
     def __extract_http_exception_statuses(self, method_object: Any) -> set[int]:
         try:
