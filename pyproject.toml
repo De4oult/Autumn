@@ -20,6 +20,12 @@ dependencies = [
     'rich'
 ]
 
+[project.urls]
+Homepage = "https://autumn.de4oult.online"
+Repository = "https://github.com/De4oult/Autumn"
+Documentation = "https://autumn.de4oult.online/documentation"
+
+
 [project.optional-dependencies]
 dev = [
     'pytest>=8',
