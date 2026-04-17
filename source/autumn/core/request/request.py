@@ -3,6 +3,9 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs
 from orjson import loads
 
+_UNSET = object()
+
+
 class Request:
     def __init__(self, scope: dict, receive: Any):
         self.app = None
@@ -15,10 +18,11 @@ class Request:
         
         self.headers = self.__parse_headers(scope.get('headers', []))
 
-        self._query_raw = self.__parse_query()
-        self.query = SimpleNamespace(**self._query_raw)
+        self._query_raw: Optional[dict[str, Any]] = None
+        self._query_value: Any = _UNSET
 
         self.__body: Optional[bytes] = None
+        self.__json: Any = _UNSET
     
     def __parse_headers(self, raw_headers):
         return { 
@@ -35,6 +39,31 @@ class Request:
             if value else None
             for key, value in parsed.items()
         }
+
+    @property
+    def query(self):
+        if self._query_value is _UNSET:
+            if self._query_raw is None:
+                self._query_raw = self.__parse_query()
+
+            self._query_value = SimpleNamespace(**self._query_raw)
+
+        return self._query_value
+
+    @query.setter
+    def query(self, value: Any) -> None:
+        if isinstance(value, dict):
+            self._query_raw = value
+            self._query_value = SimpleNamespace(**value)
+            
+            return
+
+        self._query_value = value
+
+        if hasattr(value, '__dict__'):
+            self._query_raw = dict(value.__dict__)
+        else:
+            self._query_raw = None
 
     async def body(self) -> bytes:
         if self.__body is None:
@@ -54,9 +83,11 @@ class Request:
         return self.__body
 
     async def json(self) -> dict:
-        raw: bytes = await self.body()
+        if self.__json is _UNSET:
+            raw: bytes = await self.body()
+            self.__json = loads(raw)
 
-        return loads(raw)
+        return self.__json
 
     def header(self, name: str) -> Optional[str]:
         return self.headers.get(name.lower())

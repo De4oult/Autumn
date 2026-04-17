@@ -39,6 +39,7 @@ class DependencyParameter:
 class CallMetadata:
     parameters: tuple[tuple[str, inspect.Parameter], ...]
     dependency_parameters: tuple[DependencyParameter, ...]
+    dependency_map: Dict[str, Any]
     has_var_kwargs: bool
     body_parameter: Any
 
@@ -83,10 +84,7 @@ class Container:
 
     @staticmethod
     def __callable_cache_key(callable: Callable[..., Any]) -> Any:
-        if inspect.ismethod(callable):
-            return callable.__func__
-
-        return callable
+        return getattr(callable, '__func__', callable)
 
     def __invalidate_callable_caches(self) -> None:
         self.__call_metadata_cache.clear()
@@ -140,6 +138,10 @@ class Container:
         metadata = CallMetadata(
             parameters = tuple(parameters),
             dependency_parameters = tuple(dependency_parameters),
+            dependency_map = {
+                dependency.name: dependency.dependency_type
+                for dependency in dependency_parameters
+            },
             has_var_kwargs = has_var_kwargs,
             body_parameter = body_parameter
         )
@@ -353,15 +355,15 @@ class Container:
                 ) from error
 
         return kwargs
-    
-    async def call(
+
+    async def resolve_call_kwargs(
         self,
         func: Callable[..., Any],
         *,
         context: Optional[ExecutionContext] = None,
         provided_kwargs: Optional[Dict[str, Any]] = None,
         skip_self: bool = False
-    ) -> Any:
+    ) -> Dict[str, Any]:
         provided_kwargs = provided_kwargs or {}
 
         kwargs: Dict[str, Any] = {}
@@ -369,11 +371,6 @@ class Container:
 
         parsed_body = inspect.Parameter.empty
         
-        dependency_map = {
-            dependency.name: dependency.dependency_type
-            for dependency in metadata.dependency_parameters
-        }
-
         for name, parameter in metadata.parameters:
             if name in provided_kwargs:
                 kwargs[name] = provided_kwargs[name]
@@ -395,14 +392,14 @@ class Container:
                 
                 continue
 
-            if name in dependency_map:
+            if name in metadata.dependency_map:
                 try:
-                    kwargs[name] = await self.resolve(dependency_map[name], context)
+                    kwargs[name] = await self.resolve(metadata.dependency_map[name], context)
                     continue
 
                 except (DependencyInjectionError, DependencyProviderError) as error:
                     raise DependencyInjectionError(
-                        f'Cannot resolve parameter \'{name}\' ({dependency_map[name]}) for {func}'
+                        f'Cannot resolve parameter \'{name}\' ({metadata.dependency_map[name]}) for {func}'
                     ) from error
 
             if parameter.default is inspect.Parameter.empty:
@@ -417,6 +414,23 @@ class Container:
                     continue
 
                 kwargs[key] = value
+
+        return kwargs
+
+    async def call(
+        self,
+        func: Callable[..., Any],
+        *,
+        context: Optional[ExecutionContext] = None,
+        provided_kwargs: Optional[Dict[str, Any]] = None,
+        skip_self: bool = False
+    ) -> Any:
+        kwargs = await self.resolve_call_kwargs(
+            func,
+            context = context,
+            provided_kwargs = provided_kwargs,
+            skip_self = skip_self
+        )
 
         result = func(**kwargs)
 

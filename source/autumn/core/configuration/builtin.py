@@ -18,7 +18,9 @@ class CORSConfiguration(Configuration):
 class ApplicationConfiguration(Configuration):
     __autumn_builtin_config__ = True
 
-    name: Optional[str] = None
+    name: str = 'Autumn API'
+    version: str = 'v0.1.0'
+    description: Optional[str] = None
 
     host: str = '127.0.0.1'
     port: int = 8000

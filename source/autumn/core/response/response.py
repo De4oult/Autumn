@@ -1,8 +1,9 @@
 from typing import Union, Any, Optional, Dict, List, Tuple, AsyncIterator
-from pydantic import BaseModel
 from pathlib import Path
 from orjson import dumps
 from asyncio import to_thread
+
+from autumn.core.serialization import json_default
 
 import mimetypes
 
@@ -47,33 +48,16 @@ class Response:
 class JSONResponse(Response):
     def __init__(
         self, 
-        body: dict, 
+        body: Any, 
         status: int = 200, 
         headers: Optional[Dict[str, str]] = None
     ):
-        serialized = self.serialize(body)
-
         super().__init__(
-            body         = dumps(serialized),
+            body         = dumps(body, default = json_default),
             status       = status,
             content_type = 'application/json',
             headers      = headers or {}
         )
-    
-    def serialize(self, object: Any) -> Any:
-        if isinstance(object, BaseModel):
-            return object.model_dump(mode = 'json')
-        
-        elif isinstance(object, list):
-            return [self.serialize(item) for item in object]
-        
-        elif isinstance(object, dict):
-            return {
-                key : self.serialize(value)
-                for key, value in object.items()
-            }
-        
-        return object
 
 
 class HTMLResponse(Response):

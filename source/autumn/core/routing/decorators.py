@@ -58,3 +58,42 @@ def delete(arg: Optional[Callable | str] = None) -> Callable:
 
 def websocket(arg: Optional[Callable | str] = None) -> Callable:
     return _method_decorator('WS', arg)
+
+
+def _controller_middleware(kind: str):
+    def decorator(func: Callable) -> Callable:
+        setattr(func, '__controller_middleware__', {
+            'kind': kind
+        })
+        return func
+
+    return decorator
+
+
+class _ControllerMiddlewareDecorator:
+    def __call__(self, func: Optional[Callable] = None) -> Callable:
+        decorator = _controller_middleware('around')
+
+        if func is not None and callable(func):
+            return decorator(func)
+
+        return decorator
+
+    def before(self, func: Optional[Callable] = None) -> Callable:
+        decorator = _controller_middleware('before')
+
+        if func is not None and callable(func):
+            return decorator(func)
+
+        return decorator
+
+    def after(self, func: Optional[Callable] = None) -> Callable:
+        decorator = _controller_middleware('after')
+
+        if func is not None and callable(func):
+            return decorator(func)
+
+        return decorator
+
+
+middleware = _ControllerMiddlewareDecorator()
