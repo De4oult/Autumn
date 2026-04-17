@@ -8,7 +8,7 @@
     <strong>A modern ASGI web framework focused on typed controllers, dependency injection, and clean configuration.</strong>
 </p>
 
-__Autumn__ is a Python web framework for building HTTP APIs and WebSocket applications with a small, explicit core. It leans on Python's type system instead of large decorator stacks: route parameters are typed, request bodies are inferred from Pydantic models, dependencies are injected from signatures, and responses can be serialized automatically.
+<a href="https://autumn.de4oult.online/en" target="_blank">__Autumn__</a> is a Python web framework for building HTTP APIs and WebSocket applications with a small, explicit core. It leans on Python's type system instead of large decorator stacks: route parameters are typed, request bodies are inferred from Pydantic models, dependencies are injected from signatures, and responses can be serialized automatically.
 
 If you want class-based controllers, typed configuration, built-in dependency injection, OpenAPI/Dependencies docs generation, and CORS support, Autumn is built for that style.
 
