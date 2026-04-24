@@ -49,3 +49,21 @@ class ConfigurationTests(unittest.TestCase):
 
         self.assertTrue(configuration.feature_enabled)
         self.assertEqual(configuration.server_port, 9001)
+
+    def test_configuration_build_is_callable_from_class(self) -> None:
+        class TestConfiguration(Configuration):
+            enabled: bool = True
+
+        configuration = TestConfiguration.build()
+
+        self.assertIsInstance(configuration, TestConfiguration)
+        self.assertTrue(configuration.enabled)
+
+    def test_configuration_public_exports_support_wildcard_import(self) -> None:
+        namespace: dict[str, object] = {}
+
+        exec('from autumn.configuration import *', namespace)
+
+        self.assertIn('Configuration', namespace)
+        self.assertIn('source', namespace)
+        self.assertIn('Maple', namespace)
