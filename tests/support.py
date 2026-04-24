@@ -51,7 +51,9 @@ import asyncio
 
 
 def reset_framework_state() -> None:
-    return None
+    from autumn.core.dependencies.registry import reset_registry
+
+    reset_registry()
 
 
 def make_scope(
@@ -184,3 +186,28 @@ async def asgi_request(
 
 def run_async(coro):
     return asyncio.run(coro)
+
+
+async def asgi_lifespan(app, *messages: str) -> list[dict[str, Any]]:
+    sent: list[dict[str, Any]] = []
+    pending = [
+        {'type': message}
+        for message in messages
+    ]
+
+    async def receive() -> dict[str, Any]:
+        if pending:
+            return pending.pop(0)
+
+        return {'type': 'lifespan.shutdown'}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    await app(
+        {'type': 'lifespan'},
+        receive,
+        send
+    )
+
+    return sent

@@ -1,6 +1,7 @@
 from autumn.core.websocket.websocket import WebSocket, WebSocketDisconnect
 from autumn.core.configuration.builtin import ApplicationConfiguration, CORSConfiguration
 from autumn.core.configuration.configuration import Configuration, get_registered_configs
+from autumn.core.dependencies import registry as dependency_registry
 from autumn.core.dependencies.container import Container, ExecutionContext
 from autumn.core.serialization import value_supports_json_response
 from autumn.core.middleware.manager import MiddlewareManager
@@ -11,12 +12,16 @@ from autumn.core.request.request import Request
 from autumn.core.routing.router import Router
 
 from typing import Any, Callable, Optional
+from pathlib import Path
 from colorama import Fore
 from enum import Enum
 
+import importlib.util
 import asyncio
 import inspect
+import types
 import time
+import sys
 
 class Environment(str, Enum):
     LOCAL = 'local'
@@ -25,8 +30,22 @@ class Environment(str, Enum):
     PRODUCTION = 'production'
 
 class Autumn:
-    def __init__(self, *, environment: Environment = Environment.DEVELOPMENT):
+    def __init__(
+        self,
+        *,
+        environment: Environment = Environment.DEVELOPMENT,
+        discover: bool = True,
+        root_path: Optional[str | Path] = None
+    ):
         self.environment: Environment = environment
+        caller_file = inspect.stack()[1].filename
+        self.__entrypoint_path: Optional[Path] = Path(caller_file).resolve() if caller_file else None
+        self.__root_path: Optional[Path] = Path(root_path).resolve() if root_path is not None else (
+            self.__entrypoint_path.parent if self.__entrypoint_path is not None else None
+        )
+        self.__discover_enabled: bool = discover
+        self.__discovery_completed: bool = False
+        self.__discovery_package: str = f'_autumn_discovered_{id(self)}'
 
         self.router = Router()
         
@@ -44,6 +63,7 @@ class Autumn:
         self.__dependency_functions: list[Callable] = []
         self.__configuration_classes: list[type[Configuration]] = []
         self.__service_classes: list[type] = []
+        self.__middleware_entries: list[tuple[str, Callable, Optional[str], Optional[str]]] = []
 
         self.__providers_synced: bool = False
 
@@ -139,13 +159,173 @@ class Autumn:
             else:
                 self.router.add_route(method, path, func)
 
-    def include(self, *definitions) -> 'Autumn':
+    @staticmethod
+    def __is_discoverable_file(path: Path) -> bool:
+        framework_path = Path(__file__).resolve().parents[2]
+        ignored_parts = {
+            '__pycache__',
+            '.git',
+            '.pytest_cache',
+            '.mypy_cache',
+            '.venv',
+            'venv',
+            'env',
+            'node_modules',
+            'dist',
+            'build'
+        }
+
+        try:
+            if path.is_relative_to(framework_path):
+                return False
+
+        except ValueError:
+            pass
+
+        return path.suffix == '.py' and not any(part in ignored_parts for part in path.parts)
+
+    def __ensure_discovery_package(self, module_name: str, filepath: Path) -> None:
+        parts = module_name.split('.')
+
+        for index in range(1, len(parts)):
+            package_name = '.'.join(parts[:index])
+
+            if package_name in sys.modules:
+                continue
+
+            package = types.ModuleType(package_name)
+
+            if index == 1 or self.__root_path is None:
+                package_path = self.__root_path or filepath.parent
+
+            else:
+                package_path = self.__root_path.joinpath(*parts[1:index])
+
+            package.__path__ = [str(package_path)]
+            sys.modules[package_name] = package
+
+    def __discover_modules(self) -> None:
+        if self.__discovery_completed:
+            return
+
+        self.__discovery_completed = True
+
+        if not self.__discover_enabled or self.__root_path is None:
+            return
+
+        root = self.__root_path
+
+        if not root.exists() or not root.is_dir():
+            return
+
+        for filepath in sorted(root.rglob('*.py')):
+            filepath = filepath.resolve()
+
+            if filepath == self.__entrypoint_path:
+                continue
+
+            if not self.__is_discoverable_file(filepath):
+                continue
+
+            if self.__module_loaded_from_file(filepath):
+                continue
+
+            relative = filepath.relative_to(root).with_suffix('')
+            module_parts = [
+                part
+                for part in relative.parts
+                if part != '__init__'
+            ]
+
+            if not module_parts:
+                continue
+
+            module_name = '.'.join((self.__discovery_package, *module_parts))
+
+            if module_name in sys.modules:
+                continue
+
+            self.__ensure_discovery_package(module_name, filepath)
+
+            spec = importlib.util.spec_from_file_location(module_name, filepath)
+
+            if spec is None or spec.loader is None:
+                continue
+
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+
+    @staticmethod
+    def __module_loaded_from_file(filepath: Path) -> bool:
+        for module in tuple(sys.modules.values()):
+            module_name = getattr(module, '__name__', '')
+
+            if module_name.startswith('_autumn_discovered_'):
+                continue
+
+            module_file = getattr(module, '__file__', None)
+
+            if module_file is None:
+                continue
+
+            try:
+                if Path(module_file).resolve() == filepath:
+                    return True
+
+            except (OSError, ValueError):
+                continue
+
+        return False
+
+    def __sync_registered_definitions(self) -> None:
+        self.__discover_modules()
+
+        (
+            controller_classes,
+            route_functions,
+            dependency_functions,
+            service_classes,
+            configuration_classes,
+            startup_hooks,
+            shutdown_hooks,
+            middleware_entries
+        ) = dependency_registry.registered_definitions()
+
+        for definition in (
+            *configuration_classes,
+            *controller_classes,
+            *route_functions,
+            *dependency_functions,
+            *service_classes
+        ):
+            self.__include(definition)
+
+        for hook in startup_hooks:
+            self.__append_unique(self.startup_hooks, hook)
+
+        for hook in shutdown_hooks:
+            self.__append_unique(self.shutdown_hooks, hook)
+
+        for entry in middleware_entries:
+            if not self.__append_unique(self.__middleware_entries, entry):
+                continue
+
+            kind, func, path, method = entry
+
+            if kind == 'before':
+                self.middleware.before(func, path = path, method = method)
+
+            elif kind == 'after':
+                self.middleware.after(func, path = path, method = method)
+
+    def __include(self, *definitions) -> None:
         for definition in definitions:
             if definition is None:
                 continue
 
             if isinstance(definition, (list, tuple, set, frozenset)):
-                self.include(*definition)
+                self.__include(*definition)
                 continue
 
             if inspect.isclass(definition):
@@ -185,67 +365,24 @@ class Autumn:
                         
                     continue
 
-        return self
-
-    def rest(self, __cls = None, *, prefix: str = '') -> Callable:
-        from autumn.core.routing.decorators import REST as rest_decorator
-
-        def decorator(controller_class: type) -> type:
-            controller_class = rest_decorator(prefix = prefix)(controller_class)
-
-            self.include(controller_class)
-
-            return controller_class
-
-        return decorator if __cls is None else decorator(__cls)
-
-    def service(self, __cls = None, *, scope: Scope = Scope.APP):
-        from autumn.core.dependencies.decorators import service as service_decorator
-
-        def decorator(cls):
-            cls = service_decorator(scope = scope)(cls)
-
-            self.include(cls)
-
-            return cls
-
-        return decorator if __cls is None else decorator(__cls)
-
-    def leaf(self, _func = None, *, scope: Scope = Scope.APP):
-        from autumn.core.dependencies.decorators import leaf as leaf_decorator
-
-        def decorator(func):
-            func = leaf_decorator(scope = scope)(func)
-
-            self.include(func)
-
-            return func
-
-        return decorator if _func is None else decorator(_func)
-
-    def config(self, __cls = None):
-        def decorator(cls):
-            self.include(cls)
-
-            return cls
-
-        return decorator if __cls is None else decorator(__cls)
-
-    configuration = config
-
     def get_registered_configs(self) -> list[type[Configuration]]:
+        self.__sync_registered_definitions()
         return get_registered_configs(self.__configuration_classes)
 
     def get_registered_dependency_functions(self) -> list[Callable]:
+        self.__sync_registered_definitions()
         return list(self.__dependency_functions)
 
     def get_registered_controller_classes(self) -> list[type]:
+        self.__sync_registered_definitions()
         return list(self.__controllers)
 
     def get_registered_route_functions(self) -> list[Callable]:
+        self.__sync_registered_definitions()
         return list(self.__route_functions)
 
     def get_registered_service_classes(self) -> list[type]:
+        self.__sync_registered_definitions()
         return list(self.__service_classes)
 
     def __resolve_base_routes(self) -> None:
@@ -271,6 +408,8 @@ class Autumn:
     def __sync_providers(self):
         if self.__providers_synced:
             return
+
+        self.__sync_registered_definitions()
 
         self.__application_configuration = None
         self.__cors_configuration = None
@@ -858,16 +997,6 @@ class Autumn:
 
         return response
 
-    def startup(self, func: Callable) -> Callable:
-        self.startup_hooks.append(func)
-        
-        return func
-
-    def shutdown(self, func: Callable) -> Callable:
-        self.shutdown_hooks.append(func)
-        
-        return func
-
     async def __lifespan(self, scope, receive, send):
         if scope['type'] != 'lifespan':
             return
@@ -906,6 +1035,7 @@ class Autumn:
                     print(Fore.YELLOW + '[AUTUMN]' + Fore.RESET + ': ' + Fore.GREEN + f'Shutdown completed in {duration:.2f}ms' + Fore.RESET)
 
                     await send({ 'type' : 'lifespan.shutdown.complete' })
+                    return
                 
                 except Exception as error:
                     await send({ 
@@ -1040,10 +1170,13 @@ class Autumn:
                         'request': current_request
                     }
 
-                return await self.container.call(
-                    handler_callable,
-                    context = context,
-                    provided_kwargs = current_kwargs
+                return self.__normalize_response(
+                    await self.container.call(
+                        handler_callable,
+                        context = context,
+                        provided_kwargs = current_kwargs
+                    ),
+                    handler_callable
                 )
 
             response = self.__normalize_response(

@@ -62,6 +62,9 @@ class OpenAPIGenerator:
         self.version = version
 
     def generate(self, app) -> dict:
+        if hasattr(app, 'get_registered_controller_classes'):
+            app.get_registered_controller_classes()
+
         paths: Dict[str, Any] = {}
 
         tags = []

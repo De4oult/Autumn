@@ -7,6 +7,7 @@ from autumn.core.configuration.source import ConfigurationSource, SourceChain
 from autumn.core.configuration.errors import AutumnConfigValueMissing, AutumnConfigCastError, AutumnConfigError
 from autumn.core.configuration.casting import cast_value, MISSING
 from autumn.core.configuration.maple import AliasMeta
+from autumn.core.dependencies.registry import register_configuration_class
 
 INTERNAL_FIELDS = {
     '__config_sources__',
@@ -63,6 +64,9 @@ class ConfigurationMeta(type):
         cls.__fields__ = fields
         cls.__field_types__ = field_types
         cls.__aliases__ = field_aliases
+
+        if name != 'Configuration' and not cls.__dict__.get('__autumn_builtin_config__', False):
+            register_configuration_class(cls)
 
         return cls
 
@@ -164,12 +168,15 @@ def _resolve_effective_configurations(configs: List[Type[Configuration]]) -> Lis
 
 
 def get_registered_configs(configs: Iterable[Type[Configuration]] | None = None) -> List[Type[Configuration]]:
+    from autumn.core.dependencies.registry import CONFIGURATION_CLASSES
+
     collected = list(get_builtin_configurations())
 
-    if configs is not None:
-        collected.extend(configs)
+    collected.extend(CONFIGURATION_CLASSES if configs is None else configs)
 
     return _resolve_effective_configurations(collected)
 
 def reset_configuration_registry() -> None:
-    return None
+    from autumn.core.dependencies.registry import reset_registry
+
+    reset_registry()

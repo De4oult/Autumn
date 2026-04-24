@@ -13,6 +13,12 @@ from .core.dependencies.decorators import (
     leaf,
     service
 )
+from .core.lifecycle.decorators import (
+    after,
+    before,
+    shutdown,
+    startup
+)
 from .core.serialization import (
     Public,
     Private,
@@ -26,6 +32,12 @@ __all__ = (
     # Dependency Injection
     'leaf',
     'service',
+
+    # Lifecycle
+    'after',
+    'before',
+    'shutdown',
+    'startup',
 
     # Serialization
     'Public',

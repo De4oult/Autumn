@@ -1,6 +1,7 @@
 import unittest
+from pathlib import Path
 
-from tests.support import asgi_request, reset_framework_state, run_async
+from tests.support import asgi_lifespan, asgi_request, reset_framework_state, run_async
 
 from autumn.core.app import Autumn
 from autumn.core.configuration.builtin import ApplicationConfiguration, CORSConfiguration
@@ -9,11 +10,13 @@ from autumn.core.documentation.dependencies import DependenciesDocumentationGene
 from autumn.core.request.request import Request
 from autumn.core.response.exception import HTTPException
 from autumn.core.response.response import JSONResponse, Response
-from autumn.core.routing.decorators import get, post
+from autumn.core.routing.decorators import REST, get, post
 from autumn.core.documentation.openapi import OpenAPIGenerator
 from autumn.controller import middleware
 from autumn.serialization import Private, Public, serializable
 from autumn.request import query
+from autumn.core.dependencies.decorators import leaf, service
+from autumn.core.lifecycle.decorators import after, before, shutdown, startup
 
 from pydantic import BaseModel
 
@@ -37,9 +40,9 @@ class AppIntegrationTests(unittest.TestCase):
         reset_framework_state()
 
     def test_app_injects_body_and_serializes_pydantic_response(self) -> None:
-        app = Autumn()
+        app = Autumn(discover = False)
 
-        @app.rest(prefix = '/users')
+        @REST(prefix = '/users')
         class UserController:
             @post('/')
             async def create(self, request: Request, user: UserSchema) -> UserSchema:
@@ -60,9 +63,9 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()['name'], 'Autumn')
 
     def test_route_decorator_defaults_to_root_path(self) -> None:
-        app = Autumn()
+        app = Autumn(discover = False)
 
-        @app.rest(prefix = '/users')
+        @REST(prefix = '/users')
         class UserController:
             @get
             async def index(self) -> UserSchema:
@@ -80,9 +83,9 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()['name'], 'Autumn')
 
     def test_app_serializes_plain_dict_response_automatically(self) -> None:
-        app = Autumn()
+        app = Autumn(discover = False)
 
-        @app.rest(prefix = '/users')
+        @REST(prefix = '/users')
         class UserController:
             @get('/')
             async def index(self) -> JSONResponse:
@@ -104,9 +107,9 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()['name'], 'Bertram Gilfoyle')
 
     def test_app_serializes_decorated_object_response_automatically(self) -> None:
-        app = Autumn()
+        app = Autumn(discover = False)
 
-        @app.rest(prefix = '/users')
+        @REST(prefix = '/users')
         class UserController:
             @get('/profile')
             async def profile(self) -> SerializableUser:
@@ -127,9 +130,9 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertNotIn('password_hash', response.json())
 
     def test_query_decorator_injects_kwarg_and_updates_request_query(self) -> None:
-        app = Autumn()
+        app = Autumn(discover = False)
 
-        @app.rest(prefix = '/users')
+        @REST(prefix = '/users')
         class UserController:
             @get('/')
             @query.int('page', default = 10)
@@ -165,9 +168,9 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(default_response.json()['request_page'], 10)
 
     def test_app_errors_follow_accept_header(self) -> None:
-        app = Autumn()
+        app = Autumn(discover = False)
 
-        @app.rest(prefix = '/errors')
+        @REST(prefix = '/errors')
         class ErrorController:
             @get('/teapot')
             async def teapot(self):
@@ -197,9 +200,9 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertIn('short and stout', html_response.text)
 
     def test_default_cors_rejects_unknown_origin_preflight(self) -> None:
-        app = Autumn()
+        app = Autumn(discover = False)
 
-        @app.rest(prefix = '/users')
+        @REST(prefix = '/users')
         class UserController:
             @post('/test')
             async def create(self, request: Request, user: UserSchema) -> UserSchema:
@@ -223,9 +226,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()['status'], 403)
 
     def test_custom_cors_configuration_allows_preflight(self) -> None:
-        app = Autumn()
-
-        @app.config
+        app = Autumn(discover = False)
         class CustomCORSConfiguration(CORSConfiguration):
             allowed_origins = ['https://example.com']
             allowed_methods = ['POST']
@@ -233,7 +234,7 @@ class AppIntegrationTests(unittest.TestCase):
             allow_credentials = True
             max_age = 123
 
-        @app.rest(prefix = '/users')
+        @REST(prefix = '/users')
         class UserController:
             @post('/test')
             async def create(self, request: Request, user: UserSchema) -> UserSchema:
@@ -260,9 +261,9 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.headers['Access-Control-Allow-Credentials'], 'true')
 
     def test_openapi_uses_signature_for_body_and_response_schemas(self) -> None:
-        app = Autumn()
+        app = Autumn(discover = False)
 
-        @app.rest(prefix = '/users')
+        @REST(prefix = '/users')
         class UserController:
             @post('/test')
             async def create(self, request: Request, user: UserSchema) -> UserSchema:
@@ -278,9 +279,9 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response_schema['properties']['age']['type'], 'integer')
 
     def test_openapi_uses_public_fields_for_serializable_response_schema(self) -> None:
-        app = Autumn()
+        app = Autumn(discover = False)
 
-        @app.rest(prefix = '/users')
+        @REST(prefix = '/users')
         class UserController:
             @get('/profile')
             async def profile(self) -> SerializableUser:
@@ -295,9 +296,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertNotIn('password_hash', response_schema['properties'])
 
     def test_application_metadata_is_backed_by_application_configuration(self) -> None:
-        app = Autumn()
-
-        @app.config
+        app = Autumn(discover = False)
         class ProjectApplicationConfiguration(ApplicationConfiguration):
             name = 'Autumn Test App'
             version = '1.2.3'
@@ -320,14 +319,14 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()['info']['version'], '1.2.3')
         self.assertEqual(response.json()['info']['description'], 'Application metadata from configuration')
 
-    def test_app_scoped_root_decorators_register_runtime_objects(self) -> None:
-        app = Autumn()
+    def test_independent_decorators_register_runtime_objects(self) -> None:
+        app = Autumn(discover = False)
 
-        @app.leaf
+        @leaf
         async def provide_name() -> str:
             return 'Autumn'
 
-        @app.service
+        @service
         class GreetingService:
             def __init__(self, name: str):
                 self.name = name
@@ -335,7 +334,7 @@ class AppIntegrationTests(unittest.TestCase):
             def value(self) -> str:
                 return self.name
 
-        @app.rest(prefix = '/users')
+        @REST(prefix = '/users')
         class UserController:
             def __init__(self, greetings: GreetingService):
                 self.greetings = greetings
@@ -355,14 +354,65 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(response.json()['name'], 'Autumn')
 
-    def test_dependency_docs_hide_builtin_configurations(self) -> None:
-        app = Autumn()
+    def test_independent_lifecycle_and_global_middlewares_register(self) -> None:
+        app = Autumn(discover = False)
+        events: list[str] = []
 
-        @app.config
+        @startup
+        async def on_startup() -> None:
+            events.append('startup')
+
+        @shutdown
+        async def on_shutdown() -> None:
+            events.append('shutdown')
+
+        @before
+        async def mark_request(request: Request, call_next):
+            request.headers['x-global-before'] = 'enabled'
+            events.append('before')
+            return await call_next(request)
+
+        @after(path = '/users', method = 'GET')
+        async def mark_response(request: Request, call_next):
+            response = await call_next(request)
+            response.headers['X-Global-After'] = 'enabled'
+            events.append(f'after:{response.status}')
+            return response
+
+        @REST(prefix = '/users')
+        class UserController:
+            @get
+            async def index(self, request: Request) -> dict:
+                events.append(f'handler:{request.headers["x-global-before"]}')
+                return {'ok': True}
+
+        lifespan_messages = run_async(
+            asgi_lifespan(
+                app,
+                'lifespan.startup',
+                'lifespan.shutdown'
+            )
+        )
+        response = run_async(
+            asgi_request(
+                app,
+                method = 'GET',
+                path = '/users'
+            )
+        )
+
+        self.assertEqual(
+            [message['type'] for message in lifespan_messages],
+            ['lifespan.startup.complete', 'lifespan.shutdown.complete']
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers['X-Global-After'], 'enabled')
+        self.assertEqual(events, ['startup', 'shutdown', 'before', 'handler:enabled', 'after:200'])
+
+    def test_dependency_docs_hide_builtin_configurations(self) -> None:
+        app = Autumn(discover = False)
         class CustomCORSConfiguration(CORSConfiguration):
             allowed_origins = ['https://example.com']
-
-        @app.config
         class ProjectConfiguration(Configuration):
             feature_enabled: bool = True
 
@@ -375,10 +425,8 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertNotIn('ApplicationConfiguration', configuration_names)
         self.assertNotIn('WebsocketConfiguration', configuration_names)
 
-    def test_app_scoped_config_decorator_registers_configuration(self) -> None:
-        app = Autumn()
-
-        @app.config
+    def test_independent_config_class_registers_configuration(self) -> None:
+        app = Autumn(discover = False)
         class ProjectConfiguration(Configuration):
             feature_enabled: bool = True
 
@@ -389,11 +437,26 @@ class AppIntegrationTests(unittest.TestCase):
 
         self.assertIn('ProjectConfiguration', configuration_names)
 
+    def test_app_discovers_independent_decorators_from_root_path(self) -> None:
+        root = Path(__file__).resolve().parents[1] / 'fixtures' / 'discovery_project'
+        app = Autumn(root_path = root)
+
+        response = run_async(
+            asgi_request(
+                app,
+                method = 'GET',
+                path = '/hello'
+            )
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.json()['message'], 'Hello from discovery')
+
     def test_controller_middlewares_run_only_for_own_controller(self) -> None:
-        app = Autumn()
+        app = Autumn(discover = False)
         events: list[str] = []
 
-        @app.rest(prefix = '/users')
+        @REST(prefix = '/users')
         class UserController:
             @middleware
             def controller_lifecycle(self, request: Request):
@@ -417,7 +480,7 @@ class AppIntegrationTests(unittest.TestCase):
                 events.append(f'handler:{request.headers["x-controller-before"]}')
                 return JSONResponse({'ok': True})
 
-        @app.rest(prefix = '/health')
+        @REST(prefix = '/health')
         class HealthController:
             @get('/')
             async def index(self) -> dict:
@@ -460,3 +523,4 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertNotIn('X-Controller-Around', health_response.headers)
         self.assertNotIn('X-Controller-After', health_response.headers)
         self.assertEqual(events, ['health-handler'])
+

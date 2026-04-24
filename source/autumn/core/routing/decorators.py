@@ -1,4 +1,5 @@
 from autumn.core.dependencies.scope import Scope
+from autumn.core.dependencies.registry import register_controller_class, register_route_function
 
 from typing import Callable, Optional
 
@@ -16,6 +17,8 @@ def REST(prefix: str = ''):
         setattr(__class, '__autumn_controller__', True)
         setattr(__class, '__autumn_prefix__', prefix)
 
+        register_controller_class(__class)
+
         return __class
     
     return wrapper
@@ -29,6 +32,9 @@ def route(method: str, path: str = '/') -> Callable:
             'method' : method.upper(),
             'path'   : path
         })
+
+        if not hasattr(func, '__qualname__') or '.' not in func.__qualname__:
+            register_route_function(func)
 
         return func
     

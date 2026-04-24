@@ -27,9 +27,8 @@ def dependencies_json_route(app):
     return handler
 
 def openapi_json_route(app):
-    generator = OpenAPIGenerator(title = app.name, version = app.version)
-
     async def openapi_json(request):
+        generator = OpenAPIGenerator(title = app.name, version = app.version)
         schema = generator.generate(app)
         return JSONResponse(schema, headers = NO_CACHE_HEADERS)
     
