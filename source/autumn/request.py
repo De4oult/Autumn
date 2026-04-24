@@ -14,5 +14,5 @@ query = __QueryNamespace()
 __all__ = (
     'Request',
     
-    query
+    'query'
 )

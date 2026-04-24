@@ -77,7 +77,6 @@ class Configuration(metaclass=ConfigurationMeta):
             setattr(self, key, value)
 
     @classmethod
-    @classmethod
     def build(cls) -> 'Configuration':
         chain = SourceChain(
             name    = f'{cls.__name__}.chain',

@@ -4,6 +4,11 @@ from .core.routing.decorators import (
 )
 
 __all__ = (
-    REST, 
-    get, post, put, patch, delete, middleware
+    'REST',
+    'get',
+    'post',
+    'put',
+    'patch',
+    'delete',
+    'middleware'
 )

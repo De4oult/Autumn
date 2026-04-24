@@ -204,6 +204,7 @@ class Autumn:
 
         def decorator(cls):
             cls = service_decorator(scope = scope)(cls)
+
             self.include(cls)
 
             return cls
@@ -215,6 +216,7 @@ class Autumn:
 
         def decorator(func):
             func = leaf_decorator(scope = scope)(func)
+
             self.include(func)
 
             return func
@@ -256,13 +258,10 @@ class Autumn:
 
     def __enable_documentation(self) -> None:
         from autumn.core.routing.base import (
-            favicon_route,
             dependencies_json_route,
             openapi_json_route, 
             autumn_web_route
         )
-
-        self.router.add_route('GET', '/favicon.ico', favicon_route)
 
         self.router.add_route('GET', '/documentation/dependencies.json', dependencies_json_route(self))
         self.router.add_route('GET', '/documentation/openapi.json', openapi_json_route(self))

@@ -1,7 +1,7 @@
 from importlib.metadata import PackageNotFoundError, version as __version
 
 try:
-    __version__ = __version('Autumn')
+    __version__ = __version('autumn-framework')
 
 except PackageNotFoundError:
     __version__ = '0.1.0'
@@ -24,11 +24,11 @@ __all__ = (
     'Request',
 
     # Dependency Injection
-    leaf,
-    service,
+    'leaf',
+    'service',
 
     # Serialization
-    Public,
-    Private,
-    serializable,
+    'Public',
+    'Private',
+    'serializable',
 )

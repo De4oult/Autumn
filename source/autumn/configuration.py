@@ -21,13 +21,13 @@ class __SourceNamespace:
 source = __SourceNamespace()
 
 __all__ = (
-    Configuration,
+    'Configuration',
 
     # Config source
-    source,
+    'source',
 
     # Config source keys
-    Maple,
+    'Maple',
 
     # Built-in configs
     'ApplicationConfiguration',
