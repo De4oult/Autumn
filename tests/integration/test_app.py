@@ -12,11 +12,11 @@ from autumn.core.response.exception import HTTPException
 from autumn.core.response.response import JSONResponse, Response
 from autumn.core.routing.decorators import REST, get, post
 from autumn.core.documentation.openapi import OpenAPIGenerator
-from autumn.controller import middleware
+from autumn import middleware
 from autumn.serialization import Private, Public, serializable
 from autumn.request import query
 from autumn.core.dependencies.decorators import leaf, service
-from autumn.core.lifecycle.decorators import after, before, shutdown, startup
+from autumn.core.lifecycle.decorators import shutdown, startup
 
 from pydantic import BaseModel
 
@@ -366,15 +366,21 @@ class AppIntegrationTests(unittest.TestCase):
         async def on_shutdown() -> None:
             events.append('shutdown')
 
-        @before
-        async def mark_request(request: Request, call_next):
+        @middleware(path = ('/users', '/unused'), method = ['GET'])
+        async def trace_request(request: Request, call):
+            events.append('around-before')
+            response = await call(request)
+            events.append('around-after')
+            return response
+
+        @middleware.before(path = ['/users', '/unused'], method = ('GET',))
+        async def mark_request(request: Request, call):
             request.headers['x-global-before'] = 'enabled'
             events.append('before')
-            return await call_next(request)
+            return await call(request)
 
-        @after(path = '/users', method = 'GET')
-        async def mark_response(request: Request, call_next):
-            response = await call_next(request)
+        @middleware.after(path = ['/users', '/unused'], method = ('GET',))
+        async def mark_response(request: Request, response: Response):
             response.headers['X-Global-After'] = 'enabled'
             events.append(f'after:{response.status}')
             return response
@@ -407,7 +413,7 @@ class AppIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(response.status, 200)
         self.assertEqual(response.headers['X-Global-After'], 'enabled')
-        self.assertEqual(events, ['startup', 'shutdown', 'before', 'handler:enabled', 'after:200'])
+        self.assertEqual(events, ['startup', 'shutdown', 'around-before', 'before', 'handler:enabled', 'around-after', 'after:200'])
 
     def test_dependency_docs_hide_builtin_configurations(self) -> None:
         app = Autumn(discover = False)
@@ -523,4 +529,35 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertNotIn('X-Controller-Around', health_response.headers)
         self.assertNotIn('X-Controller-After', health_response.headers)
         self.assertEqual(events, ['health-handler'])
+
+    def test_controller_middleware_receives_normalized_response(self) -> None:
+        app = Autumn(discover = False)
+
+        @serializable
+        class User:
+            def __init__(self, name: str) -> None:
+                self.name: Public[str] = name
+
+        @REST(prefix = '/users')
+        class UserController:
+            @middleware
+            def trace(self):
+                response = yield
+                response.headers['X-Trace'] = '1'
+
+            @get('/{name:str}')
+            async def get_user(self, name: str) -> User:
+                return User(name)
+
+        response = run_async(
+            asgi_request(
+                app,
+                method = 'GET',
+                path = '/users/test'
+            )
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers['X-Trace'], '1')
+        self.assertEqual(response.json(), {'name': 'test'})
 

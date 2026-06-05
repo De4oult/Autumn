@@ -1,13 +1,11 @@
 from .core.lifecycle.decorators import (
-    after,
-    before,
+    middleware,
     shutdown,
     startup
 )
 
 __all__ = (
-    'after',
-    'before',
+    'middleware',
     'shutdown',
     'startup'
 )

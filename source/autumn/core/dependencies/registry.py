@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable, Any, Iterable, List, Optional, Type
+from typing import Callable, Any, Iterable, List, Optional, Type, Sequence
 
 DEPENDENCY_FUNCTIONS: List[Callable[..., Any]] = []
 SERVICE_CLASSES: List[Type[Any]] = []
@@ -9,7 +9,7 @@ ROUTE_FUNCTIONS: List[Callable[..., Any]] = []
 CONFIGURATION_CLASSES: List[Type[Any]] = []
 STARTUP_HOOKS: List[Callable[..., Any]] = []
 SHUTDOWN_HOOKS: List[Callable[..., Any]] = []
-MIDDLEWARES: List[tuple[str, Callable[..., Any], Optional[str], Optional[str]]] = []
+MIDDLEWARES: List[tuple[str, Callable[..., Any], Optional[str | Sequence[str]], Optional[str | Sequence[str]]]] = []
 
 
 def append_unique(collection: list, item: Any) -> Any:
@@ -51,8 +51,8 @@ def register_middleware(
     kind: str,
     func: Callable[..., Any],
     *,
-    path: Optional[str] = None,
-    method: Optional[str] = None
+    path: Optional[str | Sequence[str]] = None,
+    method: Optional[str | Sequence[str]] = None
 ) -> Callable[..., Any]:
     append_unique(MIDDLEWARES, (kind, func, path, method))
 
@@ -67,7 +67,7 @@ def registered_definitions() -> tuple[
     Iterable[Type[Any]],
     Iterable[Callable[..., Any]],
     Iterable[Callable[..., Any]],
-    Iterable[tuple[str, Callable[..., Any], Optional[str], Optional[str]]]
+    Iterable[tuple[str, Callable[..., Any], Optional[str | Sequence[str]], Optional[str | Sequence[str]]]]
 ]:
     return (
         list(CONTROLLER_CLASSES),

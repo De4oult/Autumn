@@ -7,9 +7,8 @@ class PublicExportTests(unittest.TestCase):
             'autumn': {
                 'Autumn',
                 'Request',
-                'after',
-                'before',
                 'leaf',
+                'middleware',
                 'service',
                 'shutdown',
                 'startup',
@@ -18,9 +17,9 @@ class PublicExportTests(unittest.TestCase):
                 'serializable'
             },
             'autumn.configuration': {'Configuration', 'source', 'Maple'},
-            'autumn.controller': {'REST', 'get', 'post', 'put', 'patch', 'delete', 'middleware'},
+            'autumn.controller': {'REST', 'get', 'post', 'put', 'patch', 'delete'},
             'autumn.documentation': {'tag', 'summary', 'description'},
-            'autumn.lifecycle': {'after', 'before', 'shutdown', 'startup'},
+            'autumn.lifecycle': {'middleware', 'shutdown', 'startup'},
             'autumn.request': {'Request', 'query'},
             'autumn.response': {'Response', 'JSONResponse', 'HTTPException'},
             'autumn.serialization': {'Public', 'Private', 'serializable'},

@@ -11,7 +11,7 @@ from autumn.core.dependencies.scope import Scope
 from autumn.core.request.request import Request
 from autumn.core.routing.router import Router
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 from pathlib import Path
 from colorama import Fore
 from enum import Enum
@@ -63,7 +63,7 @@ class Autumn:
         self.__dependency_functions: list[Callable] = []
         self.__configuration_classes: list[type[Configuration]] = []
         self.__service_classes: list[type] = []
-        self.__middleware_entries: list[tuple[str, Callable, Optional[str], Optional[str]]] = []
+        self.__middleware_entries: list[tuple[str, Callable, Optional[str | Sequence[str]], Optional[str | Sequence[str]]]] = []
 
         self.__providers_synced: bool = False
 
@@ -724,10 +724,13 @@ class Autumn:
                         path_parameters = path_parameters
                     )
 
-                response = await self.container.call(
-                    method,
-                    context = context,
-                    provided_kwargs = self.__controller_call_kwargs(request, path_parameters)
+                response = self.__normalize_response(
+                    await self.container.call(
+                        method,
+                        context = context,
+                        provided_kwargs = self.__controller_call_kwargs(request, path_parameters)
+                    ),
+                    original_method
                 )
 
                 for middleware_name in controller_middlewares['after']:

@@ -14,8 +14,7 @@ from .core.dependencies.decorators import (
     service
 )
 from .core.lifecycle.decorators import (
-    after,
-    before,
+    middleware,
     shutdown,
     startup
 )
@@ -34,8 +33,7 @@ __all__ = (
     'service',
 
     # Lifecycle
-    'after',
-    'before',
+    'middleware',
     'shutdown',
     'startup',
 

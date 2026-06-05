@@ -2,20 +2,24 @@ from autumn.core.request.request import Request
 from autumn.core.response.response import Response
 
 from dataclasses import dataclass
-from typing import Callable, Awaitable, List, Literal, Optional
+from typing import Callable, Awaitable, List, Literal, Optional, Sequence
 
+import inspect
 import re
 
 HTTPMethod = Literal['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
-MiddlewareFunc = Callable[[Request, Callable[..., Awaitable[Response]]], Awaitable[Response]]
+RouteFilter = Optional[str | Sequence[str]]
+MethodFilter = Optional[str | Sequence[str]]
+MiddlewareFunc = Callable[[Request, Callable[[Request], Awaitable[Response]]], Awaitable[Response]]
+AfterMiddlewareFunc = Callable[[Request, Response], Awaitable[Response] | Response | None]
 
 
 @dataclass(frozen = True)
 class MiddlewareEntry:
-    func: MiddlewareFunc
-    path: Optional[str]
-    method: Optional[str]
-    pattern: Optional[re.Pattern[str]]
+    func: MiddlewareFunc | AfterMiddlewareFunc
+    path: tuple[str, ...]
+    method: tuple[str, ...]
+    patterns: tuple[re.Pattern[str], ...]
 
 
 class MiddlewareManager:
@@ -27,16 +31,19 @@ class MiddlewareManager:
     def __register(
         self,
         collection: List[MiddlewareEntry],
-        func: MiddlewareFunc,
-        path: Optional[str],
-        method: Optional[str]
-    ) -> MiddlewareFunc:
+        func: MiddlewareFunc | AfterMiddlewareFunc,
+        path: RouteFilter,
+        method: MethodFilter
+    ):
+        paths = self.__normalize_filter_values(path)
+        methods = tuple(value.upper() for value in self.__normalize_filter_values(method))
+
         collection.append(
             MiddlewareEntry(
-                func = func,
-                path = path,
-                method = method,
-                pattern = self.__path_to_regex(path) if path is not None else None
+                func     = func,
+                path     = paths,
+                method   = methods,
+                patterns = tuple(self.__path_to_regex(value) for value in paths)
             )
         )
         
@@ -44,7 +51,7 @@ class MiddlewareManager:
 
         return func
 
-    def before(self, func: Optional[MiddlewareFunc] = None, *, path: Optional[str] = None, method: Optional[HTTPMethod] = None):
+    def before(self, func: Optional[MiddlewareFunc] = None, *, path: RouteFilter = None, method: MethodFilter = None):
         if func is not None and callable(func):
             return self.__register(self.before_middlewares, func, path, method)
 
@@ -53,14 +60,24 @@ class MiddlewareManager:
 
         return decorator
     
-    def after(self, func: Optional[MiddlewareFunc] = None, *, path: Optional[str] = None, method: Optional[HTTPMethod] = None):
+    def after(self, func: Optional[AfterMiddlewareFunc] = None, *, path: RouteFilter = None, method: MethodFilter = None):
         if func is not None and callable(func):
             return self.__register(self.after_middlewares, func, path, method)
 
-        def decorator(inner_func: MiddlewareFunc):
+        def decorator(inner_func: AfterMiddlewareFunc):
             return self.__register(self.after_middlewares, inner_func, path, method)
         
         return decorator
+
+    @staticmethod
+    def __normalize_filter_values(value: str | Sequence[str] | None) -> tuple[str, ...]:
+        if value is None:
+            return ()
+
+        if isinstance(value, str):
+            return (value,)
+
+        return tuple(str(item) for item in value)
     
     @staticmethod
     def __path_to_regex(path: str) -> re.Pattern[str]:
@@ -68,10 +85,10 @@ class MiddlewareManager:
     
     @staticmethod
     def __match(path: str, method: str, entry: MiddlewareEntry) -> bool:
-        if entry.pattern is not None and not entry.pattern.match(path.rstrip('/')):
+        if entry.patterns and not any(pattern.match(path.rstrip('/')) for pattern in entry.patterns):
             return False
             
-        if entry.method is not None and entry.method != method:
+        if entry.method and method.upper() not in entry.method:
             return False
         
         return True
@@ -108,18 +125,21 @@ class MiddlewareManager:
             return invoke
 
         async def wrapped(request: Request) -> Response:
-            call_next = invoke
+            call = invoke
             
             for entry in reversed(selected_before):
-                call_next = self.__wrap_before_middleware(entry.func, call_next)
+                call = self.__wrap_before_middleware(entry.func, call)
 
-            response = await call_next(request)
+            response = await call(request)
 
             for entry in selected_after:
-                async def call_next(_: Request) -> Response:
-                    return response
-            
-                response = await entry.func(request, call_next)
+                result = entry.func(request, response)
+
+                if inspect.isawaitable(result):
+                    result = await result
+
+                if result is not None:
+                    response = result
 
             return response
 
