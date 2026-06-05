@@ -1,5 +1,6 @@
 import ast
 import inspect
+import textwrap
 from autumn.core.introspection import (
     annotation_contains_pydantic_model,
     annotation_is_response,
@@ -9,7 +10,20 @@ from autumn.core.serialization import annotation_supports_json_response, schema_
 from typing import Callable, Any, Dict, List, Optional, Type
 from uuid import UUID
 
-from autumn.core.response.response import JSONResponse
+from autumn.core.response.response import JSONResponse, Response
+
+
+JSON_MEDIA_TYPE = 'application/json'
+
+HTTP_EXCEPTION_SCHEMA = {
+    'type'       : 'object',
+    'properties' : {
+        'status'  : { 'type' : 'integer' },
+        'title'   : { 'type' : 'string' },
+        'details' : { 'type' : 'string' }
+    },
+    'required' : ['status', 'title', 'details']
+}
 
 PYTYPE_TO_SCHEMA = {
     int:   { 'type' : 'integer' },
@@ -275,26 +289,117 @@ class OpenAPIGenerator:
         responses.setdefault('500', { 'description': 'Internal Server Error' })
 
         for code in self.__extract_http_exception_statuses(method_object):
-            responses.setdefault(str(code), { 'description': f'HTTP {code}' })
+            responses.setdefault(str(code), self.__json_response(f'HTTP {code}', HTTP_EXCEPTION_SCHEMA))
 
         if is_json_response or auto_json_response:
             schema = self.__schema_for_annotation(response_model) if response_model is not None else self.__infer_json_response_schema(method_object)
 
             if schema is not None:
-                responses['200'] = {
-                    'description' : 'OK',
-                    'content'     : { 'application/json' : { 'schema': schema } }
-                }
-
-                return responses
+                self.__merge_response(
+                    responses,
+                    '200',
+                    self.__json_response('OK', schema)
+                )
 
         if returns is not inspect._empty and returns is JSONResponse:
-            responses['200'] = {
-                'description' : 'OK',
-                'content'     : { 'application/json': { 'schema': { 'type' : 'object' } } }
-            }
+            self.__merge_response(
+                responses,
+                '200',
+                self.__json_response('OK', { 'type' : 'object' })
+            )
+
+        return_responses = self.__extract_return_responses(method_object)
+
+        if (
+            return_responses
+            and returns is not inspect._empty
+            and annotation_is_response(returns)
+            and '200' not in return_responses
+            and responses.get('200') == { 'description': 'Success' }
+        ):
+            responses.pop('200')
+
+        for code, response in return_responses.items():
+            self.__merge_response(responses, code, response)
 
         return responses
+
+    def __json_response(self, description: str, schema: Optional[dict] = None) -> dict:
+        return self.__content_response(description, JSON_MEDIA_TYPE, schema)
+
+    def __content_response(self, description: str, content_type: str, schema: Optional[dict] = None) -> dict:
+        response = { 'description': description }
+
+        if schema is not None:
+            response['content'] = {
+                content_type : {
+                    'schema': schema
+                }
+            }
+
+        return response
+
+    def __merge_response(self, responses: Dict[str, Any], code: str, response: dict) -> None:
+        current = responses.get(code)
+
+        if current is None:
+            responses[code] = response
+            return
+
+        current_schema = self.__response_schema(current)
+        next_schema = self.__response_schema(response)
+
+        if next_schema is None:
+            if current_schema is None and 'content' not in current:
+                responses[code] = response
+
+            return
+
+        if current_schema is None:
+            responses[code] = response
+            return
+
+        if current_schema == next_schema:
+            return
+
+        variants = self.__schema_variants(current_schema)
+
+        if next_schema not in variants:
+            variants.append(next_schema)
+
+        current['description'] = response.get('description', current.get('description', 'OK'))
+        current['content'] = {
+            JSON_MEDIA_TYPE : {
+                'schema': { 'oneOf': variants }
+            }
+        }
+
+    def __response_schema(self, response: dict) -> Optional[dict]:
+        content = response.get('content')
+
+        if not isinstance(content, dict):
+            return None
+
+        media = content.get(JSON_MEDIA_TYPE)
+
+        if not isinstance(media, dict):
+            return None
+
+        schema = media.get('schema')
+
+        return schema if isinstance(schema, dict) else None
+
+    def __schema_variants(self, schema: dict) -> list[dict]:
+        variants = schema.get('oneOf')
+
+        if isinstance(variants, list):
+            return [
+                variant
+                for variant in variants
+                if isinstance(variant, dict)
+            ]
+
+        return [schema]
 
     def __infer_json_response_schema(self, method_object: Any) -> Optional[dict]:
         try:
@@ -320,18 +425,211 @@ class OpenAPIGenerator:
 
         return None
 
-    def __extract_http_exception_statuses(self, method_object: Any) -> set[int]:
+    def __extract_return_responses(self, method_object: Any) -> dict[str, dict]:
+        tree = self.__parse_callable_source(method_object)
+
+        if tree is None:
+            return {}
+
+        namespace = self.__callable_namespace(method_object)
+        responses: dict[str, dict] = {}
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Return) or node.value is None:
+                continue
+
+            inferred = self.__infer_response_from_return(node.value, namespace)
+
+            if inferred is None:
+                continue
+
+            code, response = inferred
+            self.__merge_response(responses, code, response)
+
+        return responses
+
+    def __infer_response_from_return(self, node: ast.AST, namespace: dict[str, Any]) -> Optional[tuple[str, dict]]:
+        if isinstance(node, ast.Call):
+            func_name = self.__call_name(node.func)
+
+            if func_name == 'JSONResponse':
+                status = self.__extract_status_from_call(node, default = 200)
+                body = node.args[0] if node.args else self.__keyword_value(node, 'body')
+                schema = self.__schema_for_expression(body, namespace) if body is not None else { 'type' : 'object' }
+
+                return str(status), self.__json_response(
+                    'OK' if status < 400 else f'HTTP {status}',
+                    schema or { 'type' : 'object' }
+                )
+
+            target = self.__resolve_name(func_name, namespace)
+
+            if target is not None:
+                response = self.__infer_response_class_return(target, node)
+
+                if response is not None:
+                    return response
+
+                schema = self.__schema_for_annotation(target)
+
+                if schema is not None:
+                    return '200', self.__json_response('OK', schema)
+
+        schema = self.__schema_for_expression(node, namespace)
+
+        if schema is None:
+            return None
+
+        return '200', self.__json_response('OK', schema)
+
+    def __infer_response_class_return(self, target: Any, node: ast.Call) -> Optional[tuple[str, dict]]:
+        if not (isinstance(target, type) and issubclass(target, Response)):
+            return None
+
+        default_status = self.__response_class_default_status(target)
+        status = self.__extract_status_from_call(node, default = default_status)
+        content_type = self.__response_class_content_type(target)
+        description = 'OK' if status < 400 else f'HTTP {status}'
+
+        if content_type is None:
+            return str(status), { 'description': description }
+
+        return str(status), self.__content_response(
+            description,
+            content_type,
+            self.__schema_for_content_type(content_type)
+        )
+
+    def __response_class_default_status(self, response_class: type[Response]) -> int:
         try:
-            target = self.__unwrap(method_object) 
-            source = inspect.getsource(target)
+            signature = inspect.signature(response_class.__init__)
+            parameter = signature.parameters.get('status')
+
+            if parameter is not None and isinstance(parameter.default, int):
+                return int(parameter.default)
 
         except Exception:
-            return set()
+            pass
 
+        return 200
+
+    def __response_class_content_type(self, response_class: type[Response]) -> Optional[str]:
         try:
+            source = textwrap.dedent(inspect.getsource(response_class.__init__))
             tree = ast.parse(source)
 
-        except SyntaxError:
+        except Exception:
+            return None
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+
+            keyword = self.__keyword_value(node, 'content_type')
+
+            if isinstance(keyword, ast.Constant) and isinstance(keyword.value, str):
+                return keyword.value
+
+        return None
+
+    def __schema_for_content_type(self, content_type: str) -> dict:
+        normalized = content_type.split(';', 1)[0].strip().lower()
+
+        if normalized == JSON_MEDIA_TYPE or normalized.endswith('+json'):
+            return { 'type' : 'object' }
+
+        if normalized.startswith('text/') or normalized in ('application/xml', 'application/xhtml+xml'):
+            return { 'type' : 'string' }
+
+        return { 'type' : 'string', 'format' : 'binary' }
+
+    def __schema_for_expression(self, node: Optional[ast.AST], namespace: dict[str, Any]) -> Optional[dict]:
+        if node is None:
+            return None
+
+        if isinstance(node, ast.Constant):
+            return self.__schema_for_constant(node.value)
+
+        if isinstance(node, ast.Dict):
+            return self.__schema_for_dict_expression(node, namespace)
+
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            return self.__schema_for_sequence_expression(node, namespace)
+
+        if isinstance(node, ast.Call):
+            func_name = self.__call_name(node.func)
+            target = self.__resolve_name(func_name, namespace)
+
+            if target is not None:
+                return self.__schema_for_annotation(target)
+
+        return None
+
+    def __schema_for_constant(self, value: Any) -> dict:
+        if isinstance(value, bool):
+            return { 'type' : 'boolean' }
+
+        if isinstance(value, int):
+            return { 'type' : 'integer' }
+
+        if isinstance(value, float):
+            return { 'type' : 'number' }
+
+        if isinstance(value, str):
+            return { 'type' : 'string' }
+
+        if value is None:
+            return { 'nullable' : True }
+
+        return {}
+
+    def __schema_for_dict_expression(self, node: ast.Dict, namespace: dict[str, Any]) -> dict:
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+
+        for key, value in zip(node.keys, node.values):
+            if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+                continue
+
+            properties[key.value] = self.__schema_for_expression(value, namespace) or {}
+            required.append(key.value)
+
+        if not properties:
+            return {
+                'type'                 : 'object',
+                'additionalProperties' : {}
+            }
+
+        return {
+            'type'       : 'object',
+            'properties' : properties,
+            'required'   : required
+        }
+
+    def __schema_for_sequence_expression(self, node: ast.List | ast.Tuple | ast.Set, namespace: dict[str, Any]) -> dict:
+        item_schemas = [
+            schema
+            for schema in (self.__schema_for_expression(item, namespace) for item in node.elts)
+            if schema is not None
+        ]
+
+        if not item_schemas:
+            return { 'type' : 'array', 'items' : {} }
+
+        first = item_schemas[0]
+
+        if all(schema == first for schema in item_schemas):
+            return { 'type' : 'array', 'items' : first }
+
+        return {
+            'type'  : 'array',
+            'items' : { 'oneOf': item_schemas }
+        }
+
+    def __extract_http_exception_statuses(self, method_object: Any) -> set[int]:
+        tree = self.__parse_callable_source(method_object)
+
+        if tree is None:
             return set()
 
         statuses: set[int] = set()
@@ -345,18 +643,25 @@ class OpenAPIGenerator:
 
         return statuses
 
+    def __parse_callable_source(self, method_object: Any) -> Optional[ast.AST]:
+        try:
+            target = self.__unwrap(method_object) 
+            source = textwrap.dedent(inspect.getsource(target))
+
+        except Exception:
+            return None
+
+        try:
+            return ast.parse(source)
+
+        except SyntaxError:
+            return None
+
     def __try_parse_http_exception_status(self, exception_node: ast.AST) -> Optional[int]:
         if not isinstance(exception_node, ast.Call):
             return None
 
-        func = exception_node.func
-        func_name = None
-
-        if isinstance(func, ast.Name):
-            func_name = func.id
-
-        elif isinstance(func, ast.Attribute):
-            func_name = func.attr
+        func_name = self.__call_name(exception_node.func)
 
         if func_name != 'HTTPException':
             return None
@@ -368,13 +673,72 @@ class OpenAPIGenerator:
                 return int(first.value)
 
         for keyword in exception_node.keywords:
-            if keyword.arg == 'status_code':
+            if keyword.arg in ('status', 'status_code'):
                 value = keyword.value
 
                 if isinstance(value, ast.Constant) and isinstance(value.value, int):
                     return int(value.value)
 
         return None
+
+    def __extract_status_from_call(self, node: ast.Call, *, default: int) -> int:
+        for keyword in node.keywords:
+            if keyword.arg in ('status', 'status_code'):
+                value = keyword.value
+
+                if isinstance(value, ast.Constant) and isinstance(value.value, int):
+                    return int(value.value)
+
+        if len(node.args) > 1:
+            value = node.args[1]
+
+            if isinstance(value, ast.Constant) and isinstance(value.value, int):
+                return int(value.value)
+
+        return default
+
+    def __keyword_value(self, node: ast.Call, name: str) -> Optional[ast.AST]:
+        for keyword in node.keywords:
+            if keyword.arg == name:
+                return keyword.value
+
+        return None
+
+    def __call_name(self, node: ast.AST) -> Optional[str]:
+        if isinstance(node, ast.Name):
+            return node.id
+
+        if isinstance(node, ast.Attribute):
+            return node.attr
+
+        return None
+
+    def __resolve_name(self, name: Optional[str], namespace: dict[str, Any]) -> Optional[Any]:
+        if name is None:
+            return None
+
+        return namespace.get(name)
+
+    def __callable_namespace(self, method_object: Any) -> dict[str, Any]:
+        target = self.__unwrap(method_object)
+        namespace: dict[str, Any] = {}
+        module = inspect.getmodule(target)
+
+        if module is not None:
+            namespace.update(vars(module))
+
+        namespace.update(getattr(target, '__globals__', {}) or {})
+
+        try:
+            closure = inspect.getclosurevars(target)
+            namespace.update(closure.globals)
+            namespace.update(closure.nonlocals)
+            namespace.update(closure.builtins)
+
+        except Exception:
+            pass
+
+        return namespace
 
     def __unwrap(self, callable_object: Callable):
         while hasattr(callable_object, '__wrapped__'):
