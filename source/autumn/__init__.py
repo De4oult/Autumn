@@ -8,7 +8,7 @@ except PackageNotFoundError:
 
 
 from .core.app import Autumn
-from .core.environment import Environment, Theme
+from .core.environment import Environment, Theme, only
 from .core.request.request import Request
 from .core.dependencies.decorators import (
     leaf,
@@ -29,6 +29,7 @@ __all__ = (
     'Autumn', 
     'Environment',
     'Theme',
+    'only',
     'Request',
 
     # Dependency Injection

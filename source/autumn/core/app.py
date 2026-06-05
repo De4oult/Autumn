@@ -3,6 +3,8 @@ from autumn.core.configuration.builtin import ApplicationConfiguration, CORSConf
 from autumn.core.configuration.configuration import Configuration, get_registered_configs
 from autumn.core.dependencies import registry as dependency_registry
 from autumn.core.dependencies.container import Container, ExecutionContext
+from autumn.core.exception.exception import DependencyInjectionError
+from autumn.core.introspection import get_declared_body_parameter
 from autumn.core.serialization import value_supports_json_response
 from autumn.core.middleware.manager import MiddlewareManager
 from autumn.core.environment import Environment
@@ -12,7 +14,7 @@ from autumn.core.dependencies.scope import Scope
 from autumn.core.request.request import Request
 from autumn.core.routing.router import Router
 
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence, get_type_hints
 from pathlib import Path
 from colorama import Fore
 
@@ -59,6 +61,8 @@ class Autumn:
         self.__configuration_classes: list[type[Configuration]] = []
         self.__service_classes: list[type] = []
         self.__middleware_entries: list[tuple[str, Callable, Optional[str | Sequence[str]], Optional[str | Sequence[str]]]] = []
+        self.__disabled_provider_reasons: dict[Any, str] = {}
+        self.__disabled_definitions: set[Any] = set()
 
         self.__providers_synced: bool = False
 
@@ -105,6 +109,65 @@ class Autumn:
 
         collection.append(item)
         return True
+
+    @staticmethod
+    def __normalize_environment_values(values) -> tuple[Environment, ...]:
+        if isinstance(values, (str, Environment)):
+            values = (values, )
+
+        return tuple(
+            item if isinstance(item, Environment) else Environment(str(item))
+            for item in values
+        )
+
+    def __only_environments_for(self, definition) -> Optional[tuple[Environment, ...]]:
+        values = getattr(definition, '__autumn_only_environments__', None)
+
+        if values is None:
+            return None
+
+        return self.__normalize_environment_values(values)
+
+    def __definition_is_allowed(self, definition) -> bool:
+        allowed_on = self.__only_environments_for(definition)
+
+        return allowed_on is None or self.environment in allowed_on
+
+    def __environment_label(self, environment: Environment) -> str:
+        return environment.value if isinstance(environment, Environment) else str(environment)
+
+    def __only_error_message(self, definition, provider_key: Any) -> str:
+        allowed_on = self.__only_environments_for(definition) or ()
+        allowed = ', '.join(self.__environment_label(item) for item in allowed_on) or 'none'
+        name = getattr(definition, '__qualname__', None) or getattr(definition, '__name__', None) or repr(definition)
+        key_name = getattr(provider_key, '__qualname__', None) or getattr(provider_key, '__name__', None) or repr(provider_key)
+
+        return (
+            f'{key_name} is only allowed on {allowed}, '
+            f'but current environment is {self.environment.value} ({name})'
+        )
+
+    def __provider_key_for_definition(self, definition) -> Optional[Any]:
+        if inspect.isclass(definition):
+            return definition
+
+        provider_meta = getattr(definition, '__autumn_provider__', None)
+
+        if provider_meta and provider_meta[0] == 'func':
+            try:
+                return get_type_hints(definition).get('return')
+
+            except Exception:
+                return None
+
+        return definition if callable(definition) else None
+
+    def __record_disabled_definition(self, definition) -> None:
+        self.__disabled_definitions.add(definition)
+        key = self.__provider_key_for_definition(definition)
+
+        if key is not None:
+            self.__disabled_provider_reasons[key] = self.__only_error_message(definition, key)
 
     @staticmethod
     def __normalize_route_path(path: str) -> str:
@@ -304,12 +367,26 @@ class Autumn:
             self.__include(definition)
 
         for hook in startup_hooks:
+            if not self.__definition_is_allowed(hook):
+                self.__record_disabled_definition(hook)
+                continue
+
             self.__append_unique(self.startup_hooks, hook)
 
         for hook in shutdown_hooks:
+            if not self.__definition_is_allowed(hook):
+                self.__record_disabled_definition(hook)
+                continue
+
             self.__append_unique(self.shutdown_hooks, hook)
 
         for entry in middleware_entries:
+            _, func, _, _ = entry
+
+            if not self.__definition_is_allowed(func):
+                self.__record_disabled_definition(func)
+                continue
+
             if not self.__append_unique(self.__middleware_entries, entry):
                 continue
 
@@ -328,6 +405,10 @@ class Autumn:
 
             if isinstance(definition, (list, tuple, set, frozenset)):
                 self.__include(*definition)
+                continue
+
+            if not self.__definition_is_allowed(definition):
+                self.__record_disabled_definition(definition)
                 continue
 
             if inspect.isclass(definition):
@@ -430,6 +511,31 @@ class Autumn:
         self.__application_configuration = None
         self.__cors_configuration = None
         self.__webui_configuration = None
+        leaf_provider_keys: set[Any] = set()
+
+        for func in self.__dependency_functions:
+            try:
+                provider_key = get_type_hints(func).get('return')
+
+            except Exception:
+                provider_key = None
+
+            if provider_key is not None:
+                leaf_provider_keys.add(provider_key)
+
+        allowed_provider_keys = {
+            Request,
+            WebSocket,
+            *self.__controllers,
+            *self.__service_classes,
+            *self.__configuration_classes,
+            *leaf_provider_keys
+        }
+
+        self.container.configure_environment(
+            allowed_provider_keys = allowed_provider_keys,
+            disabled_provider_reasons = dict(self.__disabled_provider_reasons)
+        )
 
         for func in self.__dependency_functions:
             self.container.register_dependency_function(func)
@@ -460,7 +566,245 @@ class Autumn:
             if issubclass(configuration_class, WebUIConfiguration):
                 self.__webui_configuration = configuration
 
+        self.__validate_environment_dependency_graph(leaf_provider_keys)
+
         self.__providers_synced = True
+
+    def __safe_type_hints(self, callable: Callable[..., Any]) -> dict[str, Any]:
+        try:
+            return get_type_hints(callable)
+
+        except Exception:
+            return {}
+
+    def __dependency_key_available(self, key: Any, provider_keys: set[Any]) -> bool:
+        if key in (Request, WebSocket):
+            return True
+
+        if key in self.__disabled_provider_reasons:
+            return False
+
+        return key in provider_keys
+
+    def __callable_dependency_keys(
+        self,
+        callable: Callable[..., Any],
+        *,
+        skip_self: bool = False,
+        provider_keys: set[Any],
+        provided_names: set[str] | None = None
+    ) -> list[Any]:
+        provided_names = provided_names or set()
+
+        try:
+            signature = inspect.signature(callable)
+
+        except Exception:
+            return []
+
+        hints = self.__safe_type_hints(callable)
+        body_parameter = None
+
+        try:
+            body_parameter = get_declared_body_parameter(
+                callable,
+                provided_kwargs = {name: object() for name in provided_names},
+                skip_self = skip_self,
+                can_resolve_dependency = lambda key: self.__dependency_key_available(key, provider_keys),
+                signature = signature,
+                hints = hints
+            )
+
+        except RuntimeError:
+            body_parameter = None
+
+        dependencies: list[Any] = []
+
+        for name, parameter in signature.parameters.items():
+            if skip_self and name == 'self':
+                continue
+
+            if parameter.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                continue
+
+            if name in provided_names:
+                continue
+
+            if body_parameter is not None and name == body_parameter.name:
+                continue
+
+            if name in hints:
+                dependencies.append(hints[name])
+
+        return dependencies
+
+    def __provider_leaf_map(self) -> dict[Any, Callable[..., Any]]:
+        leaf_map: dict[Any, Callable[..., Any]] = {}
+
+        for func in self.__dependency_functions:
+            key = self.__provider_key_for_definition(func)
+
+            if key is not None:
+                leaf_map[key] = func
+
+        return leaf_map
+
+    def __dependency_consumer_name(self, consumer: Any) -> str:
+        return getattr(consumer, '__qualname__', None) or getattr(consumer, '__name__', None) or repr(consumer)
+
+    def __validate_dependency_key(
+        self,
+        key: Any,
+        *,
+        consumer: Any,
+        provider_keys: set[Any],
+        leaf_map: dict[Any, Callable[..., Any]],
+        stack: tuple[Any, ...]
+    ) -> None:
+        disabled_reason = self.__disabled_provider_reasons.get(key)
+
+        if disabled_reason is not None:
+            raise DependencyInjectionError(
+                f'{self.__dependency_consumer_name(consumer)} requires {disabled_reason}'
+            )
+
+        if key in (Request, WebSocket):
+            return
+
+        if key not in provider_keys:
+            key_name = getattr(key, '__qualname__', None) or getattr(key, '__name__', None) or repr(key)
+
+            raise DependencyInjectionError(
+                f'{self.__dependency_consumer_name(consumer)} requires {key_name}, but no provider is registered'
+            )
+
+        self.__validate_provider_key(
+            key,
+            provider_keys = provider_keys,
+            leaf_map = leaf_map,
+            stack = stack
+        )
+
+    def __validate_provider_key(
+        self,
+        key: Any,
+        *,
+        provider_keys: set[Any],
+        leaf_map: dict[Any, Callable[..., Any]],
+        stack: tuple[Any, ...] = ()
+    ) -> None:
+        if key in (Request, WebSocket) or key in self.__configuration_classes:
+            return
+
+        if key in stack:
+            return
+
+        if key in self.__service_classes or key in self.__controllers:
+            callable = key.__init__
+            dependencies = self.__callable_dependency_keys(
+                callable,
+                skip_self = True,
+                provider_keys = provider_keys
+            )
+
+        elif key in leaf_map:
+            callable = leaf_map[key]
+            dependencies = self.__callable_dependency_keys(
+                callable,
+                provider_keys = provider_keys
+            )
+
+        else:
+            return
+
+        for dependency in dependencies:
+            self.__validate_dependency_key(
+                dependency,
+                consumer = callable,
+                provider_keys = provider_keys,
+                leaf_map = leaf_map,
+                stack = (*stack, key)
+            )
+
+    def __validate_route_handler_dependencies(
+        self,
+        route,
+        *,
+        provider_keys: set[Any],
+        leaf_map: dict[Any, Callable[..., Any]]
+    ) -> None:
+        provided_names = {'request', 'websocket', *route.parameters}
+
+        if isinstance(route.handler, tuple) and len(route.handler) == 2 and isinstance(route.handler[1], str):
+            controller_class, method_name = route.handler
+            method = getattr(controller_class, method_name)
+
+            self.__validate_provider_key(
+                controller_class,
+                provider_keys = provider_keys,
+                leaf_map = leaf_map
+            )
+
+            callable = method
+            skip_self = True
+
+        else:
+            callable = route.handler
+            skip_self = False
+
+        for query in getattr(callable, '__query_parameters__', []) or []:
+            name = query.get('name')
+
+            if name:
+                provided_names.add(name)
+
+        dependencies = self.__callable_dependency_keys(
+            callable,
+            skip_self = skip_self,
+            provided_names = provided_names,
+            provider_keys = provider_keys
+        )
+
+        for dependency in dependencies:
+            self.__validate_dependency_key(
+                dependency,
+                consumer = callable,
+                provider_keys = provider_keys,
+                leaf_map = leaf_map,
+                stack = ()
+            )
+
+    def __validate_environment_dependency_graph(self, leaf_provider_keys: set[Any]) -> None:
+        provider_keys = {
+            Request,
+            WebSocket,
+            *self.__controllers,
+            *self.__service_classes,
+            *self.__configuration_classes,
+            *leaf_provider_keys
+        }
+        leaf_map = self.__provider_leaf_map()
+
+        for service_class in self.__service_classes:
+            self.__validate_provider_key(
+                service_class,
+                provider_keys = provider_keys,
+                leaf_map = leaf_map
+            )
+
+        for leaf_key in leaf_provider_keys:
+            self.__validate_provider_key(
+                leaf_key,
+                provider_keys = provider_keys,
+                leaf_map = leaf_map
+            )
+
+        for route in self.router.get_routes():
+            self.__validate_route_handler_dependencies(
+                route,
+                provider_keys = provider_keys,
+                leaf_map = leaf_map
+            )
 
     def __normalize_response(self, result, handler_callable) -> Response:
         if isinstance(result, Response):

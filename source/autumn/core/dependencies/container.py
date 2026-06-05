@@ -65,6 +65,8 @@ class Container:
     def __init__(self) -> None:
         self.__providers: Dict[Type[Any], Provider] = {}
         self.__app_cache: Dict[Type[Any], Any] = {}
+        self.__allowed_provider_keys: Optional[set[Any]] = None
+        self.__disabled_provider_reasons: Dict[Any, str] = {}
         
         self.__call_metadata_cache: Dict[tuple[Any, bool], CallMetadata] = {}
         self.__inject_metadata_cache: Dict[tuple[Any, bool], InjectMetadata] = {}
@@ -81,6 +83,16 @@ class Container:
             target = BuiltinProvider(WebSocket, Scope.WEBSOCKET),
             scope  = Scope.WEBSOCKET
         )
+
+    def configure_environment(
+        self,
+        *,
+        allowed_provider_keys: Optional[set[Any]] = None,
+        disabled_provider_reasons: Optional[Dict[Any, str]] = None
+    ) -> None:
+        self.__allowed_provider_keys = allowed_provider_keys
+        self.__disabled_provider_reasons = disabled_provider_reasons or {}
+        self.__invalidate_callable_caches()
 
     @staticmethod
     def __callable_cache_key(callable: Callable[..., Any]) -> Any:
@@ -224,12 +236,20 @@ class Container:
         self.__invalidate_callable_caches()
 
     def __get_provider(self, key: type) -> Provider:
+        disabled_reason = self.__disabled_provider_reasons.get(key)
+
+        if disabled_reason is not None:
+            raise DependencyProviderError(disabled_reason)
+
         if key in self.__providers:
             return self.__providers[key]
         
         provider_meta = getattr(key, '__autumn_provider__', None)
 
         if provider_meta and provider_meta[0] == 'class':
+            if self.__allowed_provider_keys is not None and key not in self.__allowed_provider_keys:
+                raise DependencyProviderError(f'Provider is not registered for current application: {key}')
+
             scope = getattr(key, '__autumn_scope__', Scope.APP)
             provider = Provider(kind = 'class', target = key, scope = scope)
             
