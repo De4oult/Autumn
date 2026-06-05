@@ -1,10 +1,11 @@
 from autumn.core.websocket.websocket import WebSocket, WebSocketDisconnect
-from autumn.core.configuration.builtin import ApplicationConfiguration, CORSConfiguration
+from autumn.core.configuration.builtin import ApplicationConfiguration, CORSConfiguration, WebUIConfiguration
 from autumn.core.configuration.configuration import Configuration, get_registered_configs
 from autumn.core.dependencies import registry as dependency_registry
 from autumn.core.dependencies.container import Container, ExecutionContext
 from autumn.core.serialization import value_supports_json_response
 from autumn.core.middleware.manager import MiddlewareManager
+from autumn.core.environment import Environment
 from autumn.core.response.exception import HTTPException
 from autumn.core.response.response import JSONResponse, Response
 from autumn.core.dependencies.scope import Scope
@@ -14,7 +15,6 @@ from autumn.core.routing.router import Router
 from typing import Any, Callable, Optional, Sequence
 from pathlib import Path
 from colorama import Fore
-from enum import Enum
 
 import importlib.util
 import asyncio
@@ -22,12 +22,6 @@ import inspect
 import types
 import time
 import sys
-
-class Environment(str, Enum):
-    LOCAL = 'local'
-    DEVELOPMENT = 'development'
-    STAGING = 'staging'
-    PRODUCTION = 'production'
 
 class Autumn:
     def __init__(
@@ -56,6 +50,7 @@ class Autumn:
         self.container = Container()
         self.__application_configuration: Optional[ApplicationConfiguration] = None
         self.__cors_configuration: Optional[CORSConfiguration] = None
+        self.__webui_configuration = None
         self.__http_handler_cache: dict[tuple[type, str], Callable] = {}
         self.__websocket_handler_cache: dict[tuple[type, str], Callable] = {}
         self.__controllers: list[type] = []
@@ -87,6 +82,13 @@ class Autumn:
             self.__sync_providers()
 
         return self.__application_configuration
+
+    @property
+    def webui_configuration(self):
+        if not self.__providers_synced or self.__webui_configuration is None:
+            self.__sync_providers()
+
+        return self.__webui_configuration
 
     def __get_application_metadata(self, name: str):
         configuration = self.application_configuration
@@ -388,10 +390,24 @@ class Autumn:
     def __resolve_base_routes(self) -> None:
         from autumn.core.routing.base import favicon_route
 
-        if self.environment != Environment.PRODUCTION:
-            self.__enable_documentation()
-
+        self.__enable_documentation()
         self.router.add_route('GET', '/favicon.ico', favicon_route)
+
+    def is_webui_allowed(self) -> bool:
+        configuration = self.webui_configuration
+
+        if configuration is None or not configuration.enabled:
+            return False
+
+        allowed_on = configuration.allowed_on
+
+        if isinstance(allowed_on, (str, Environment)):
+            allowed_on = (allowed_on, )
+
+        return self.environment in {
+            item if isinstance(item, Environment) else Environment(str(item))
+            for item in allowed_on
+        }
 
     def __enable_documentation(self) -> None:
         from autumn.core.routing.base import (
@@ -403,7 +419,7 @@ class Autumn:
         self.router.add_route('GET', '/documentation/dependencies.json', dependencies_json_route(self))
         self.router.add_route('GET', '/documentation/openapi.json', openapi_json_route(self))
 
-        self.router.add_route('GET', '/autumn', autumn_web_route)
+        self.router.add_route('GET', '/autumn', autumn_web_route(self))
         
     def __sync_providers(self):
         if self.__providers_synced:
@@ -413,6 +429,7 @@ class Autumn:
 
         self.__application_configuration = None
         self.__cors_configuration = None
+        self.__webui_configuration = None
 
         for func in self.__dependency_functions:
             self.container.register_dependency_function(func)
@@ -439,6 +456,9 @@ class Autumn:
 
             if issubclass(configuration_class, CORSConfiguration):
                 self.__cors_configuration = configuration
+
+            if issubclass(configuration_class, WebUIConfiguration):
+                self.__webui_configuration = configuration
 
         self.__providers_synced = True
 

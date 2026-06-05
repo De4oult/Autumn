@@ -1,6 +1,7 @@
 from typing import List, Optional
 
 from autumn.core.configuration.configuration import Configuration
+from autumn.core.environment import Environment, Theme
 
 class CORSConfiguration(Configuration):
     __autumn_builtin_config__ = True
@@ -39,3 +40,11 @@ class WebsocketConfiguration(Configuration):
     ping_timeout: int = 20
 
     max_message_size: int = 1048576
+
+class WebUIConfiguration(Configuration):
+    __autumn_builtin_config__ = True
+
+    enabled: bool = True
+    leaves_animation_enabled: bool = True
+    default_theme: Theme = Theme.DARK
+    allowed_on: tuple[Environment, ...] = (Environment.DEVELOPMENT,)

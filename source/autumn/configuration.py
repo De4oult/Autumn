@@ -2,9 +2,11 @@ from typing import Callable
 
 from .core.configuration.configuration import Configuration
 from .core.configuration.maple import Maple
+from .core.environment import Theme
 from .core.configuration.builtin import (
     ApplicationConfiguration,
     CORSConfiguration,
+    WebUIConfiguration,
     WebsocketConfiguration
 )
 from .core.configuration.decorators import (
@@ -28,9 +30,11 @@ __all__ = (
 
     # Config source keys
     'Maple',
+    'Theme',
 
     # Built-in configs
     'ApplicationConfiguration',
     'CORSConfiguration',
+    'WebUIConfiguration',
     'WebsocketConfiguration'
 )

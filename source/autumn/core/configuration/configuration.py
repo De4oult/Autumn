@@ -132,7 +132,7 @@ def get_builtin_configurations() -> List[Type[Configuration]]:
 
     builtin_configurations: List[Type[Configuration]] = []
 
-    for builtin_name in ('CORSConfiguration', 'ApplicationConfiguration', 'WebsocketConfiguration'):
+    for builtin_name in ('CORSConfiguration', 'ApplicationConfiguration', 'WebsocketConfiguration', 'WebUIConfiguration'):
         builtin_class = getattr(_builtin, builtin_name, None)
 
         if builtin_class is not None:

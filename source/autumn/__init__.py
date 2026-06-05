@@ -8,6 +8,7 @@ except PackageNotFoundError:
 
 
 from .core.app import Autumn
+from .core.environment import Environment, Theme
 from .core.request.request import Request
 from .core.dependencies.decorators import (
     leaf,
@@ -26,6 +27,8 @@ from .core.serialization import (
 
 __all__ = (
     'Autumn', 
+    'Environment',
+    'Theme',
     'Request',
 
     # Dependency Injection

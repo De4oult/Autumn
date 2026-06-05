@@ -2,6 +2,7 @@ from autumn.core.configuration.errors import AutumnConfigCastError
 
 from typing import Any, get_args, get_origin, Union
 from uuid import UUID
+from enum import Enum
 
 MISSING = object()
 
@@ -62,6 +63,29 @@ def cast_value(raw: Any, target_type: Any) -> Any:
         
         return [cast_value(x, inner) for x in raw]
 
+    if origin is tuple:
+        if len(arguments) == 2 and arguments[1] is Ellipsis:
+            inner = arguments[0]
+
+            if raw is None:
+                raise AutumnConfigCastError(f'Expected tuple, got None')
+
+            if not isinstance(raw, (list, tuple)):
+                raise AutumnConfigCastError(f'Expected tuple/list, got {type(raw).__name__}')
+
+            return tuple(cast_value(x, inner) for x in raw)
+
+        if raw is None:
+            raise AutumnConfigCastError(f'Expected tuple, got None')
+
+        if not isinstance(raw, (list, tuple)):
+            raise AutumnConfigCastError(f'Expected tuple/list, got {type(raw).__name__}')
+
+        if len(raw) != len(arguments):
+            raise AutumnConfigCastError(f'Expected tuple of length {len(arguments)}, got {len(raw)}')
+
+        return tuple(cast_value(value, item_type) for value, item_type in zip(raw, arguments))
+
     if origin is dict:
         key_t, value_t = arguments
 
@@ -84,6 +108,26 @@ def cast_value(raw: Any, target_type: Any) -> Any:
             raise AutumnConfigCastError(f'Expected UUID str, got {type(raw).__name__}')
 
         return UUID(raw)
+
+    try:
+        if isinstance(target_type, type) and issubclass(target_type, Enum):
+            if isinstance(raw, target_type):
+                return raw
+
+            try:
+                return target_type(raw)
+
+            except ValueError:
+                if isinstance(raw, str):
+                    normalized = raw.strip().upper()
+
+                    if normalized in target_type.__members__:
+                        return target_type[normalized]
+
+                raise AutumnConfigCastError(f'Cannot cast {raw!r} to {target_type}') from None
+
+    except TypeError:
+        pass
 
     if target_type is bool:
         if isinstance(raw, bool):
