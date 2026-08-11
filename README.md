@@ -77,8 +77,10 @@ app = Autumn(
 ```
 
 When `root_path` is provided, module names are resolved relative to that directory.
-Imports made by a discovered module continue to work normally, so listing a
-controller module is sufficient when it imports its services.
+When a discovered name points to a package, Autumn loads every Python module and
+nested package inside it. This makes `discover = 'project.controllers'` sufficient
+for a controllers package with multiple files. Discovery stays within each explicitly
+listed package; imports made by its modules continue to work normally.
 
 ## Philosophy
 

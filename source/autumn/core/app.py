@@ -21,6 +21,7 @@ from dataclasses import dataclass
 
 import importlib
 import importlib.util
+import pkgutil
 import asyncio
 import inspect
 import types
@@ -266,6 +267,69 @@ class Autumn:
             package.__path__ = [str(package_path)]
             sys.modules[package_name] = package
 
+    def __load_discovery_file(
+        self,
+        requested_module: str,
+        filepath: Path,
+        *,
+        is_package: bool = False
+    ) -> None:
+        module_name = f'{self.__discovery_package}.{requested_module}'
+
+        if module_name in sys.modules:
+            return
+
+        self.__ensure_discovery_package(module_name, filepath)
+        spec = importlib.util.spec_from_file_location(
+            module_name,
+            filepath,
+            submodule_search_locations = [str(filepath.parent)] if is_package else None
+        )
+
+        if spec is None or spec.loader is None:
+            raise ImportError(f'Unable to load discovery module: {requested_module!r}')
+
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(module_name, None)
+            raise
+
+    def __discover_local_package(self, requested_module: str, package_path: Path) -> None:
+        package_path = package_path.resolve()
+        files = list(package_path.rglob('*.py'))
+
+        def module_details(filepath: Path) -> tuple[str, bool]:
+            resolved_filepath = filepath.resolve()
+
+            if not resolved_filepath.is_relative_to(package_path):
+                raise PermissionError(
+                    f'Discovery module escapes the requested package: {filepath}'
+                )
+
+            relative = filepath.relative_to(package_path)
+            is_package = relative.name == '__init__.py'
+            relative_parts = relative.parent.parts if is_package else relative.with_suffix('').parts
+            module_parts = (*requested_module.split('.'), *relative_parts)
+
+            if any(not part.isidentifier() for part in module_parts):
+                raise ValueError(f'Invalid Python module in discovery package: {filepath}')
+
+            return '.'.join(module_parts), is_package
+
+        discovered = [(*module_details(filepath), filepath) for filepath in files]
+        discovered.sort(key = lambda item: (item[0].count('.'), not item[1], item[0]))
+
+        for module_name, is_package, filepath in discovered:
+            self.__load_discovery_file(
+                module_name,
+                filepath.resolve(),
+                is_package = is_package
+            )
+
     def __discover_modules(self) -> None:
         if self.__discovery_completed:
             return
@@ -284,6 +348,7 @@ class Autumn:
                 raise ValueError(f'Invalid discovery module: {requested_module!r}')
 
             filepath = None
+            local_package_path = None
 
             if self.__root_path is not None:
                 module_path = self.__root_path.joinpath(*requested_module.split('.'))
@@ -293,27 +358,29 @@ class Autumn:
                 if file_candidate.is_file():
                     filepath = file_candidate.resolve()
                 elif package_candidate.is_file():
-                    filepath = package_candidate.resolve()
+                    local_package_path = module_path.resolve()
 
-            if filepath is None:
-                importlib.import_module(requested_module)
+            if local_package_path is not None:
+                self.__discover_local_package(requested_module, local_package_path)
                 continue
 
-            module_name = f'{self.__discovery_package}.{requested_module}'
-
-            if module_name in sys.modules:
+            if filepath is not None:
+                self.__load_discovery_file(requested_module, filepath)
                 continue
 
-            self.__ensure_discovery_package(module_name, filepath)
+            module = importlib.import_module(requested_module)
 
-            spec = importlib.util.spec_from_file_location(module_name, filepath)
+            if hasattr(module, '__path__'):
+                children = sorted(
+                    name
+                    for _, name, _ in pkgutil.walk_packages(
+                        module.__path__,
+                        prefix = f'{requested_module}.'
+                    )
+                )
 
-            if spec is None or spec.loader is None:
-                continue
-
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[module_name] = module
-            spec.loader.exec_module(module)
+                for child in children:
+                    importlib.import_module(child)
 
     def __sync_registered_definitions(self) -> None:
         self.__discover_modules()
