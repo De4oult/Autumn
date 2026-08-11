@@ -5,7 +5,8 @@ from .core.response.response import (
     XMLResponse,
     RedirectResponse,
     FileResponse,
-    StreamFileResponse
+    StreamFileResponse,
+    InvalidHeaderError
 )
 from .core.response.exception import HTTPException
 
@@ -17,6 +18,7 @@ __all__ = (
     'RedirectResponse',
     'FileResponse',
     'StreamFileResponse',
+    'InvalidHeaderError',
 
     'HTTPException'
 )

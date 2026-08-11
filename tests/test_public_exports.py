@@ -6,6 +6,9 @@ class PublicExportTests(unittest.TestCase):
         expected_exports = {
             'autumn': {
                 'Autumn',
+                'Environment',
+                'Theme',
+                'only',
                 'Request',
                 'leaf',
                 'middleware',
@@ -16,7 +19,7 @@ class PublicExportTests(unittest.TestCase):
                 'Private',
                 'serializable'
             },
-            'autumn.configuration': {'Configuration', 'source', 'Maple'},
+            'autumn.configuration': {'Configuration', 'source', 'Maple', 'Theme', 'WebUIConfiguration'},
             'autumn.controller': {'REST', 'get', 'post', 'put', 'patch', 'delete'},
             'autumn.documentation': {'tag', 'summary', 'description'},
             'autumn.lifecycle': {'middleware', 'shutdown', 'startup'},

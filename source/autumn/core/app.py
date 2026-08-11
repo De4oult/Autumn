@@ -6,7 +6,7 @@ from autumn.core.dependencies.container import Container, ExecutionContext
 from autumn.core.exception.exception import DependencyInjectionError
 from autumn.core.introspection import get_declared_body_parameter
 from autumn.core.serialization import value_supports_json_response
-from autumn.core.middleware.manager import MiddlewareManager
+from autumn.core.middleware.manager import MiddlewareManager, MiddlewarePlan
 from autumn.core.environment import Environment
 from autumn.core.response.exception import HTTPException
 from autumn.core.response.response import JSONResponse, Response
@@ -17,7 +17,9 @@ from autumn.core.routing.router import Router
 from typing import Any, Callable, Optional, Sequence, get_type_hints
 from pathlib import Path
 from colorama import Fore
+from dataclasses import dataclass
 
+import importlib
 import importlib.util
 import asyncio
 import inspect
@@ -25,12 +27,20 @@ import types
 import time
 import sys
 
+
+@dataclass(frozen = True)
+class HTTPExecutionPlan:
+    handler_callable: Callable
+    is_controller: bool
+    query_metadata: tuple[dict, ...]
+    middleware: MiddlewarePlan
+
 class Autumn:
     def __init__(
         self,
         *,
         environment: Environment = Environment.DEVELOPMENT,
-        discover: bool = True,
+        discover: Optional[str | Sequence[str]] = None,
         root_path: Optional[str | Path] = None
     ):
         self.environment: Environment = environment
@@ -39,7 +49,19 @@ class Autumn:
         self.__root_path: Optional[Path] = Path(root_path).resolve() if root_path is not None else (
             self.__entrypoint_path.parent if self.__entrypoint_path is not None else None
         )
-        self.__discover_enabled: bool = discover
+        if isinstance(discover, bool):
+            raise TypeError(
+                'discover must contain explicit module names, '
+                "for example discover=('controllers.users', 'services.users')"
+            )
+
+        if not discover:
+            self.__discovery_modules: tuple[str, ...] = ()
+        elif isinstance(discover, str):
+            self.__discovery_modules = (discover,)
+        else:
+            self.__discovery_modules = tuple(str(module) for module in discover)
+
         self.__discovery_completed: bool = False
         self.__discovery_package: str = f'_autumn_discovered_{id(self)}'
 
@@ -224,31 +246,6 @@ class Autumn:
             else:
                 self.router.add_route(method, path, func)
 
-    @staticmethod
-    def __is_discoverable_file(path: Path) -> bool:
-        framework_path = Path(__file__).resolve().parents[2]
-        ignored_parts = {
-            '__pycache__',
-            '.git',
-            '.pytest_cache',
-            '.mypy_cache',
-            '.venv',
-            'venv',
-            'env',
-            'node_modules',
-            'dist',
-            'build'
-        }
-
-        try:
-            if path.is_relative_to(framework_path):
-                return False
-
-        except ValueError:
-            pass
-
-        return path.suffix == '.py' and not any(part in ignored_parts for part in path.parts)
-
     def __ensure_discovery_package(self, module_name: str, filepath: Path) -> None:
         parts = module_name.split('.')
 
@@ -275,37 +272,34 @@ class Autumn:
 
         self.__discovery_completed = True
 
-        if not self.__discover_enabled or self.__root_path is None:
+        if not self.__discovery_modules:
             return
 
-        root = self.__root_path
+        for requested_module in self.__discovery_modules:
+            requested_module = requested_module.strip().strip('.')
 
-        if not root.exists() or not root.is_dir():
-            return
+            if not requested_module or any(
+                part in ('', '.', '..') for part in requested_module.split('.')
+            ):
+                raise ValueError(f'Invalid discovery module: {requested_module!r}')
 
-        for filepath in sorted(root.rglob('*.py')):
-            filepath = filepath.resolve()
+            filepath = None
 
-            if filepath == self.__entrypoint_path:
+            if self.__root_path is not None:
+                module_path = self.__root_path.joinpath(*requested_module.split('.'))
+                file_candidate = module_path.with_suffix('.py')
+                package_candidate = module_path / '__init__.py'
+
+                if file_candidate.is_file():
+                    filepath = file_candidate.resolve()
+                elif package_candidate.is_file():
+                    filepath = package_candidate.resolve()
+
+            if filepath is None:
+                importlib.import_module(requested_module)
                 continue
 
-            if not self.__is_discoverable_file(filepath):
-                continue
-
-            if self.__module_loaded_from_file(filepath):
-                continue
-
-            relative = filepath.relative_to(root).with_suffix('')
-            module_parts = [
-                part
-                for part in relative.parts
-                if part != '__init__'
-            ]
-
-            if not module_parts:
-                continue
-
-            module_name = '.'.join((self.__discovery_package, *module_parts))
+            module_name = f'{self.__discovery_package}.{requested_module}'
 
             if module_name in sys.modules:
                 continue
@@ -320,28 +314,6 @@ class Autumn:
             module = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = module
             spec.loader.exec_module(module)
-
-    @staticmethod
-    def __module_loaded_from_file(filepath: Path) -> bool:
-        for module in tuple(sys.modules.values()):
-            module_name = getattr(module, '__name__', '')
-
-            if module_name.startswith('_autumn_discovered_'):
-                continue
-
-            module_file = getattr(module, '__file__', None)
-
-            if module_file is None:
-                continue
-
-            try:
-                if Path(module_file).resolve() == filepath:
-                    return True
-
-            except (OSError, ValueError):
-                continue
-
-        return False
 
     def __sync_registered_definitions(self) -> None:
         self.__discover_modules()
@@ -569,6 +541,32 @@ class Autumn:
         self.__validate_environment_dependency_graph(leaf_provider_keys)
 
         self.__providers_synced = True
+        self.__compile_http_execution_plans()
+
+    def __compile_http_execution_plans(self) -> None:
+        for route in self.router.get_routes():
+            if route.method == 'WS':
+                continue
+
+            handler = route.handler
+            is_controller = (
+                isinstance(handler, tuple)
+                and len(handler) == 2
+                and isinstance(handler[1], str)
+            )
+            handler_callable = (
+                self.__get_http_handler_callable(handler)
+                if is_controller
+                else handler
+            )
+            route.execution_plan = HTTPExecutionPlan(
+                handler_callable = handler_callable,
+                is_controller = is_controller,
+                query_metadata = tuple(
+                    getattr(handler_callable, '__query_parameters__', ())
+                ),
+                middleware = self.middleware.compile(route.path_template, route.method)
+            )
 
     def __safe_type_hints(self, callable: Callable[..., Any]) -> dict[str, Any]:
         try:
@@ -814,6 +812,12 @@ class Autumn:
             return JSONResponse(result)
 
         raise TypeError(f'Handler returned unsupported result type: {type(result).__name__}')
+
+    def __internal_error_details(self, error: Exception) -> str:
+        if self.environment == Environment.PRODUCTION:
+            return 'Internal Server Error'
+
+        return str(error)
 
     @staticmethod
     def __copy_handler_metadata(source: Callable, target: Callable) -> Callable:
@@ -1123,6 +1127,7 @@ class Autumn:
             return response
 
         cached = self.__copy_handler_metadata(original_method, endpoint)
+        cached.__autumn_controller_endpoint__ = True
         self.__http_handler_cache[handler] = cached
 
         return cached
@@ -1150,6 +1155,40 @@ class Autumn:
 
         self.__websocket_handler_cache[handler] = endpoint
         return endpoint
+
+    async def __invoke_http_execution_plan(
+        self,
+        plan: HTTPExecutionPlan,
+        current_request: Request,
+        original_request: Request,
+        context: ExecutionContext,
+        provided_kwargs: dict[str, Any]
+    ) -> Response:
+        current_kwargs = provided_kwargs
+
+        if current_request is not original_request:
+            current_kwargs = {
+                **provided_kwargs,
+                'request': current_request
+            }
+
+        if plan.is_controller:
+            result = await plan.handler_callable(
+                current_request,
+                **{
+                    key: value
+                    for key, value in current_kwargs.items()
+                    if key != 'request'
+                }
+            )
+        else:
+            result = await self.container.call(
+                plan.handler_callable,
+                context = context,
+                provided_kwargs = current_kwargs
+            )
+
+        return self.__normalize_response(result, plan.handler_callable)
 
     @staticmethod
     async def __send_response(send, response: Response) -> None:
@@ -1456,7 +1495,8 @@ class Autumn:
                 return
             
             except Exception as error:
-                print(error)
+                if self.environment != Environment.PRODUCTION:
+                    print(error)
                 try:
                     await websocket.close(code = 1011)
 
@@ -1472,7 +1512,15 @@ class Autumn:
 
         assert scope['type'] == 'http'
 
-        request = Request(scope, receive)
+        request = Request(
+            scope,
+            receive,
+            max_body_bytes = (
+                self.__application_configuration.max_request_body_bytes
+                if self.__application_configuration is not None
+                else 1024 * 1024
+            )
+        )
         request.app = self
 
         if self.__is_cors_preflight(request):
@@ -1487,10 +1535,11 @@ class Autumn:
                 response = error.to_response(request)
 
             except Exception as error:
-                print(error)
+                if self.environment != Environment.PRODUCTION:
+                    print(error)
                 response = HTTPException(
                     status = 500,
-                    details = str(error)
+                    details = self.__internal_error_details(error)
                 ).to_response(request)
 
             await self.__send_response(send, response)
@@ -1505,64 +1554,62 @@ class Autumn:
                     details = f'Route {scope.get('path')} not found'
                 )
         
-            handler = match.handler
             parameters = match.parameters
 
             context = ExecutionContext()
             context.values[Request] = request
             request._autumn_execution_context = context
 
-            if isinstance(handler, tuple) and (len(handler) == 2) and isinstance(handler[1], str):
-                handler_callable = self.__get_http_handler_callable(handler)
+            plan = match.route.execution_plan
 
-            else:
-                handler_callable = handler
+            if plan is None:
+                raise RuntimeError(
+                    f'HTTP execution plan was not compiled for {match.route.path_template}'
+                )
 
             provided_kwargs = {
                 **parameters,
                 'request': request
             }
 
-            query_meta = getattr(handler_callable, '__query_parameters__', [])
-
-            if query_meta:
-                provided_kwargs.update(self.__resolve_query_kwargs(request, query_meta))
-
-            async def invoke(current_request: Request) -> Response:
-                current_kwargs = provided_kwargs
-
-                if current_request is not request:
-                    current_kwargs = {
-                        **provided_kwargs,
-                        'request': current_request
-                    }
-
-                return self.__normalize_response(
-                    await self.container.call(
-                        handler_callable,
-                        context = context,
-                        provided_kwargs = current_kwargs
-                    ),
-                    handler_callable
+            if plan.query_metadata:
+                provided_kwargs.update(
+                    self.__resolve_query_kwargs(request, plan.query_metadata)
                 )
 
-            response = self.__normalize_response(
-                await self.middleware.wrap(
-                    invoke,
-                    match.route.path_template,
-                    scope['method']
-                )(request),
-                handler_callable
-            )
+            if plan.middleware.is_empty:
+                response = await self.__invoke_http_execution_plan(
+                    plan,
+                    request,
+                    request,
+                    context,
+                    provided_kwargs
+                )
+            else:
+                async def invoke(current_request: Request) -> Response:
+                    return await self.__invoke_http_execution_plan(
+                        plan,
+                        current_request,
+                        request,
+                        context,
+                        provided_kwargs
+                    )
+
+                response = self.__normalize_response(
+                    await plan.middleware.execute(invoke, request),
+                    plan.handler_callable
+                )
 
         except HTTPException as error:
             response = error.to_response(request)
 
         except Exception as error:
-            print(error)
+            if self.environment != Environment.PRODUCTION:
+                print(error)
+
             response = HTTPException(
                 status = 500, 
-                details = str(error)
+                details = self.__internal_error_details(error)
             ).to_response(request)
 
         response = self.__apply_response_headers(

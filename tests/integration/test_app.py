@@ -4,8 +4,11 @@ from pathlib import Path
 from tests.support import asgi_lifespan, asgi_request, reset_framework_state, run_async
 
 from autumn.core.app import Autumn
-from autumn.core.configuration.builtin import ApplicationConfiguration, CORSConfiguration
+from autumn.core.configuration.builtin import ApplicationConfiguration, CORSConfiguration, WebUIConfiguration
 from autumn.core.configuration.configuration import Configuration
+from autumn.core.environment import Environment, Theme
+from autumn.core.environment import only
+from autumn.core.exception.exception import DependencyInjectionError
 from autumn.core.documentation.dependencies import DependenciesDocumentationGenerator
 from autumn.core.request.request import Request
 from autumn.core.response.exception import HTTPException
@@ -40,7 +43,7 @@ class AppIntegrationTests(unittest.TestCase):
         reset_framework_state()
 
     def test_app_injects_body_and_serializes_pydantic_response(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
 
         @REST(prefix = '/users')
         class UserController:
@@ -63,7 +66,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()['name'], 'Autumn')
 
     def test_route_decorator_defaults_to_root_path(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
 
         @REST(prefix = '/users')
         class UserController:
@@ -83,7 +86,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()['name'], 'Autumn')
 
     def test_app_serializes_plain_dict_response_automatically(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
 
         @REST(prefix = '/users')
         class UserController:
@@ -107,7 +110,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()['name'], 'Bertram Gilfoyle')
 
     def test_app_serializes_decorated_object_response_automatically(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
 
         @REST(prefix = '/users')
         class UserController:
@@ -130,7 +133,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertNotIn('password_hash', response.json())
 
     def test_query_decorator_injects_kwarg_and_updates_request_query(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
 
         @REST(prefix = '/users')
         class UserController:
@@ -168,7 +171,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(default_response.json()['request_page'], 10)
 
     def test_app_errors_follow_accept_header(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
 
         @REST(prefix = '/errors')
         class ErrorController:
@@ -200,7 +203,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertIn('short and stout', html_response.text)
 
     def test_default_cors_rejects_unknown_origin_preflight(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
 
         @REST(prefix = '/users')
         class UserController:
@@ -226,7 +229,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()['status'], 403)
 
     def test_custom_cors_configuration_allows_preflight(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
         class CustomCORSConfiguration(CORSConfiguration):
             allowed_origins = ['https://example.com']
             allowed_methods = ['POST']
@@ -261,7 +264,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.headers['Access-Control-Allow-Credentials'], 'true')
 
     def test_openapi_uses_signature_for_body_and_response_schemas(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
 
         @REST(prefix = '/users')
         class UserController:
@@ -279,7 +282,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response_schema['properties']['age']['type'], 'integer')
 
     def test_openapi_uses_public_fields_for_serializable_response_schema(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
 
         @REST(prefix = '/users')
         class UserController:
@@ -295,8 +298,66 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response_schema['properties']['age']['type'], 'integer')
         self.assertNotIn('password_hash', response_schema['properties'])
 
+    def test_openapi_infers_responses_from_static_returns_and_http_exceptions(self) -> None:
+        app = Autumn()
+
+        class CreatedUser(BaseModel):
+            id: int
+            name: str
+
+        @REST(prefix = '/users')
+        class UserController:
+            @post('/create')
+            async def create(self):
+                return JSONResponse({
+                    'id'   : 1,
+                    'user' : CreatedUser(id = 1, name = 'Autumn'),
+                    'meta' : self
+                }, status = 201)
+
+            @get('/maybe')
+            async def maybe(self):
+                if False:
+                    raise HTTPException(status = 404, details = 'missing')
+
+                return CreatedUser(id = 1, name = 'Autumn')
+
+        schema = OpenAPIGenerator().generate(app)
+        created_response = schema['paths']['/users/create']['post']['responses']['201']['content']['application/json']['schema']
+        maybe_responses = schema['paths']['/users/maybe']['get']['responses']
+
+        self.assertEqual(created_response['properties']['id']['type'], 'integer')
+        self.assertEqual(created_response['properties']['user']['properties']['name']['type'], 'string')
+        self.assertEqual(created_response['properties']['meta'], {})
+        self.assertEqual(maybe_responses['200']['content']['application/json']['schema']['properties']['id']['type'], 'integer')
+        self.assertEqual(maybe_responses['404']['content']['application/json']['schema']['properties']['details']['type'], 'string')
+
+    def test_openapi_infers_custom_response_subclasses(self) -> None:
+        app = Autumn()
+
+        class CustomResponse(Response):
+            def __init__(self, message: str, status: int = 202):
+                super().__init__(
+                    body         = message,
+                    status       = status,
+                    content_type = 'text/custom-response; charset=utf-8'
+                )
+
+        @REST(prefix = '/custom')
+        class CustomController:
+            @get('/response')
+            async def response(self) -> CustomResponse:
+                return CustomResponse('accepted')
+
+        schema = OpenAPIGenerator().generate(app)
+        responses = schema['paths']['/custom/response']['get']['responses']
+        response = responses['202']['content']['text/custom-response; charset=utf-8']
+
+        self.assertNotIn('200', responses)
+        self.assertEqual(response['schema']['type'], 'string')
+
     def test_application_metadata_is_backed_by_application_configuration(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
         class ProjectApplicationConfiguration(ApplicationConfiguration):
             name = 'Autumn Test App'
             version = '1.2.3'
@@ -319,8 +380,95 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()['info']['version'], '1.2.3')
         self.assertEqual(response.json()['info']['description'], 'Application metadata from configuration')
 
+    def test_webui_configuration_controls_visibility_and_markup(self) -> None:
+        app = Autumn(environment = Environment.PRODUCTION)
+
+        response = run_async(
+            asgi_request(
+                app,
+                method = 'GET',
+                path = '/autumn'
+            )
+        )
+
+        self.assertEqual(response.status, 404)
+
+        class CustomWebUIConfiguration(WebUIConfiguration):
+            allowed_on = (Environment.PRODUCTION,)
+            default_theme = Theme.LIGHT
+            leaves_animation_enabled = False
+
+        configured_app = Autumn(environment = Environment.PRODUCTION)
+        configured_response = run_async(
+            asgi_request(
+                configured_app,
+                method = 'GET',
+                path = '/autumn'
+            )
+        )
+
+        self.assertEqual(configured_response.status, 200)
+        self.assertIn('"defaultTheme":"light"', configured_response.text)
+        self.assertIn('"leavesAnimationEnabled":false', configured_response.text)
+        self.assertIn('"packageVersion":', configured_response.text)
+
+    def test_only_excludes_controllers_from_routes_and_documentation(self) -> None:
+        app = Autumn(environment = Environment.PRODUCTION)
+
+        @only(Environment.DEVELOPMENT)
+        @REST(prefix = '/debug')
+        class DebugController:
+            @get('/ping')
+            async def ping(self) -> dict:
+                return {'ok': True}
+
+        response = run_async(
+            asgi_request(
+                app,
+                method = 'GET',
+                path = '/debug/ping'
+            )
+        )
+        schema = OpenAPIGenerator().generate(app)
+
+        self.assertEqual(response.status, 404)
+        self.assertNotIn('/debug/ping', schema['paths'])
+
+    def test_only_rejects_active_dependency_chain_that_requires_disabled_provider(self) -> None:
+        app = Autumn(environment = Environment.PRODUCTION)
+
+        @only(Environment.DEVELOPMENT)
+        @service
+        class MockGateway:
+            pass
+
+        @service
+        class CheckoutService:
+            def __init__(self, gateway: MockGateway):
+                self.gateway = gateway
+
+        @REST(prefix = '/checkout')
+        class CheckoutController:
+            def __init__(self, checkout: CheckoutService):
+                self.checkout = checkout
+
+            @get('/status')
+            async def status(self) -> dict:
+                return {'ok': True}
+
+        with self.assertRaises(DependencyInjectionError) as raised:
+            run_async(
+                asgi_request(
+                    app,
+                    method = 'GET',
+                    path = '/checkout/status'
+                )
+            )
+
+        self.assertIn('MockGateway is only allowed on development', str(raised.exception))
+
     def test_independent_decorators_register_runtime_objects(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
 
         @leaf
         async def provide_name() -> str:
@@ -355,7 +503,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()['name'], 'Autumn')
 
     def test_independent_lifecycle_and_global_middlewares_register(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
         events: list[str] = []
 
         @startup
@@ -416,7 +564,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(events, ['startup', 'shutdown', 'around-before', 'before', 'handler:enabled', 'around-after', 'after:200'])
 
     def test_dependency_docs_hide_builtin_configurations(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
         class CustomCORSConfiguration(CORSConfiguration):
             allowed_origins = ['https://example.com']
         class ProjectConfiguration(Configuration):
@@ -432,7 +580,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertNotIn('WebsocketConfiguration', configuration_names)
 
     def test_independent_config_class_registers_configuration(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
         class ProjectConfiguration(Configuration):
             feature_enabled: bool = True
 
@@ -445,7 +593,10 @@ class AppIntegrationTests(unittest.TestCase):
 
     def test_app_discovers_independent_decorators_from_root_path(self) -> None:
         root = Path(__file__).resolve().parents[1] / 'fixtures' / 'discovery_project'
-        app = Autumn(root_path = root)
+        app = Autumn(
+            root_path = root,
+            discover = ('controllers.hello',)
+        )
 
         response = run_async(
             asgi_request(
@@ -459,7 +610,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()['message'], 'Hello from discovery')
 
     def test_controller_middlewares_run_only_for_own_controller(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
         events: list[str] = []
 
         @REST(prefix = '/users')
@@ -531,7 +682,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(events, ['health-handler'])
 
     def test_controller_middleware_receives_normalized_response(self) -> None:
-        app = Autumn(discover = False)
+        app = Autumn()
 
         @serializable
         class User:

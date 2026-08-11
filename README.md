@@ -16,6 +16,7 @@ If you want class-based controllers, typed configuration, built-in dependency in
 - ASGI-first application object that works with standard ASGI servers such as `uvicorn`
 - Class-based REST controllers with typed path parameters like `{id:int}` and `{file:path}`
 - Signature-driven dependency injection with `@service` and `@leaf`
+- Explicit module discovery without recursive filesystem execution
 - Automatic request body validation from Pydantic annotations
 - Automatic JSON serialization for Pydantic return values
 - Built-in configuration system with environment, JSON, and YAML sources
@@ -35,29 +36,49 @@ __Autumn__ tries to keep the ergonomic parts of modern Python frameworks while s
 That makes the happy path concise, while still keeping the codebase readable when the application grows.
 
 ## Benchmarks
-Latest local benchmark run: `2026-04-17`
+Latest repeated local benchmark run: `2026-08-12`
 
 Environment:
 - Windows
 - Python `3.12`
-- `uvicorn --workers 1 --loop asyncio --http h11 --lifespan off`
+- `uvicorn --workers 1 --loop asyncio --http httptools --lifespan off`
 - Concurrency: `64`
-- Warmup: `2s`
-- Measurement duration: `5s`
+- Warmup: `2s` per scenario
+- Measurement duration: `8s` per scenario
+- Repetitions: `5`, randomized framework and scenario order
+- Reported values: median of repetitions
 
-Average across `plaintext`, `json`, `path_parameter`, and `body` scenarios:
+Median RPS by scenario:
 
-| Framework   | Avg RPS | Avg P95 (ms) |
-| ----------- | ------: | -----------: |
-| Falcon      | 4471.53 | 16.66        |
-| __Autumn__  | 4006.67 | 17.38        |
-| FastAPI     | 3644.17 | 19.49        |
-| Flask       | 2149.76 | 33.06        |
+| Framework | Plaintext | JSON | Path parameter | Validated body |
+| --- | ---: | ---: | ---: | ---: |
+| Falcon | 8381.56 | 8347.52 | 8391.16 | 6967.47 |
+| Starlette | 8403.90 | 8333.73 | 8264.93 | 6748.19 |
+| __Autumn__ | 8107.42 | 8223.67 | 7993.92 | 6866.13 |
+| FastAPI | 7470.63 | 6787.41 | 5810.57 | 5277.82 |
 
-In this run, Autumn is:
-- `86.37%` faster than Flask on average
-- `9.95%` faster than FastAPI on average
-- `10.39%` slower than Falcon on average
+In this run, Autumn is `23.06%` faster than FastAPI on average, `1.76%` behind
+Starlette, and `2.79%` behind Falcon. The comparison contains 80 measurements in
+total; every measured request completed successfully.
+
+## Explicit module discovery
+
+Autumn never scans and executes every Python file below the project root. Modules
+that contain independently decorated controllers, services, lifecycle hooks, or
+configuration are listed explicitly:
+
+```python
+app = Autumn(
+    discover = (
+        'project.controllers',
+        'project.services',
+    )
+)
+```
+
+When `root_path` is provided, module names are resolved relative to that directory.
+Imports made by a discovered module continue to work normally, so listing a
+controller module is sufficient when it imports its services.
 
 ## Philosophy
 

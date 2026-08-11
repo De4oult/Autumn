@@ -3,8 +3,10 @@ from pydantic import BaseModel, TypeAdapter
 from typing import Annotated, Any, TypeVar, get_args, get_origin
 from dataclasses import dataclass
 
+import operator
 import textwrap
 import inspect
+import types
 import ast
 
 T = TypeVar('T')
@@ -60,17 +62,114 @@ def _build_annotation_context(cls: type) -> dict[str, Any]:
     return namespace
 
 
-def _safe_get_annotations(target: Any, namespace: dict[str, Any] | None = None) -> dict[str, Any]:
-    try:
-        return inspect.get_annotations(
-            target,
-            eval_str = True,
-            globals  = namespace,
-            locals   = namespace
+_SAFE_ANNOTATION_NAMES = {
+    'None': type(None),
+    'bool': bool,
+    'bytes': bytes,
+    'dict': dict,
+    'float': float,
+    'frozenset': frozenset,
+    'int': int,
+    'list': list,
+    'object': object,
+    'set': set,
+    'str': str,
+    'tuple': tuple,
+    'Any': Any
+}
+
+
+def _resolve_annotation_node(node: ast.AST, namespace: dict[str, Any]) -> Any:
+    if isinstance(node, ast.Name):
+        if node.id in namespace:
+            return namespace[node.id]
+
+        if node.id in _SAFE_ANNOTATION_NAMES:
+            return _SAFE_ANNOTATION_NAMES[node.id]
+
+        raise ValueError(f'Unknown annotation name: {node.id}')
+
+    if isinstance(node, ast.Attribute):
+        if node.attr.startswith('_'):
+            raise ValueError('Private attributes are not allowed in annotations')
+
+        owner = _resolve_annotation_node(node.value, namespace)
+
+        if isinstance(owner, types.ModuleType):
+            try:
+                return vars(owner)[node.attr]
+
+            except KeyError as error:
+                raise ValueError(f'Unknown annotation attribute: {node.attr}') from error
+
+        if isinstance(owner, type):
+            try:
+                return inspect.getattr_static(owner, node.attr)
+
+            except AttributeError as error:
+                raise ValueError(f'Unknown annotation attribute: {node.attr}') from error
+
+        raise ValueError('Annotation attributes are only allowed on modules and types')
+
+    if isinstance(node, ast.Subscript):
+        target = _resolve_annotation_node(node.value, namespace)
+
+        try:
+            argument = _resolve_annotation_node(node.slice, namespace)
+
+        except (AttributeError, KeyError, TypeError, ValueError):
+            argument = Any
+
+        return target[argument]
+
+    if isinstance(node, ast.Tuple):
+        return tuple(_resolve_annotation_node(item, namespace) for item in node.elts)
+
+    if isinstance(node, ast.List):
+        return [_resolve_annotation_node(item, namespace) for item in node.elts]
+
+    if isinstance(node, ast.Constant):
+        if node.value is None or isinstance(node.value, (str, int, bool)):
+            return node.value
+
+        raise ValueError('Unsupported annotation constant')
+
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return operator.or_(
+            _resolve_annotation_node(node.left, namespace),
+            _resolve_annotation_node(node.right, namespace)
         )
 
+    raise ValueError(f'Unsupported annotation expression: {type(node).__name__}')
+
+
+def _resolve_annotation(annotation: Any, namespace: dict[str, Any]) -> Any:
+    if not isinstance(annotation, str):
+        return annotation
+
+    expression = ast.parse(annotation, mode = 'eval')
+    return _resolve_annotation_node(expression.body, namespace)
+
+
+def _safe_get_annotations(target: Any, namespace: dict[str, Any] | None = None) -> dict[str, Any]:
+    namespace = namespace or {}
+
+    try:
+        annotations = inspect.get_annotations(target, eval_str = False)
+
     except Exception:
-        return getattr(target, '__annotations__', {}) or {}
+        annotations = getattr(target, '__annotations__', {}) or {}
+
+    resolved: dict[str, Any] = {}
+
+    for name, annotation in annotations.items():
+        try:
+            resolved[name] = _resolve_annotation(annotation, namespace)
+
+        except (AttributeError, KeyError, SyntaxError, TypeError, ValueError):
+            resolved[name] = Any
+
+    return resolved
 
 
 def _collect_class_level_fields(cls: type) -> list[SerializableField]:
@@ -141,11 +240,7 @@ def _collect_instance_fields_from_init(cls: type) -> list[SerializableField]:
             continue
 
         try:
-            annotation = eval(
-                compile(ast.Expression(node.annotation), '<autumn-serializable>', 'eval'),
-                namespace,
-                namespace
-            )
+            annotation = _resolve_annotation_node(node.annotation, namespace)
 
         except Exception:
             annotation = Any

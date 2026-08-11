@@ -2,16 +2,27 @@ from typing import Any, Optional
 from types import SimpleNamespace
 from urllib.parse import parse_qs
 from orjson import loads
+from autumn.core.response.exception import HTTPException
 
 _UNSET = object()
 
 
 class Request:
-    def __init__(self, scope: dict, receive: Any):
+    def __init__(
+        self,
+        scope: dict,
+        receive: Any,
+        *,
+        max_body_bytes: Optional[int] = 1024 * 1024
+    ):
+        if max_body_bytes is not None and max_body_bytes < 0:
+            raise ValueError('max_body_bytes must be greater than or equal to 0, or None')
+
         self.app = None
         
         self.scope = scope
         self.receive = receive
+        self.max_body_bytes = max_body_bytes
 
         self.method = scope.get('method')
         self.path = scope.get('path')
@@ -67,25 +78,54 @@ class Request:
 
     async def body(self) -> bytes:
         if self.__body is None:
-            chunks: list[bytes] = []
+            content_length = self.header('content-length')
+
+            if content_length is not None and self.max_body_bytes is not None:
+                try:
+                    declared_size = int(content_length)
+
+                except ValueError:
+                    declared_size = None
+
+                if declared_size is not None and declared_size > self.max_body_bytes:
+                    raise HTTPException(
+                        status = 413,
+                        details = f'Request body exceeds the {self.max_body_bytes} byte limit'
+                    )
+
+            body = bytearray()
 
             more_body = True
             
             while more_body:
                 message = await self.receive()
 
-                chunks.append(message.get('body', b''))
+                chunk = message.get('body', b'')
+
+                if chunk:
+                    body.extend(chunk)
+
+                    if self.max_body_bytes is not None and len(body) > self.max_body_bytes:
+                        raise HTTPException(
+                            status = 413,
+                            details = f'Request body exceeds the {self.max_body_bytes} byte limit'
+                        )
                 
                 more_body = message.get('more_body', False)
             
-            self.__body = b''.join(chunks)
+            self.__body = bytes(body)
         
         return self.__body
 
     async def json(self) -> dict:
         if self.__json is _UNSET:
-            raw: bytes = await self.body()
-            self.__json = loads(raw)
+            self.__json = self.parse_json_bytes(await self.body())
+
+        return self.__json
+
+    def parse_json_bytes(self, body: bytes):
+        if self.__json is _UNSET:
+            self.__json = loads(body)
 
         return self.__json
 

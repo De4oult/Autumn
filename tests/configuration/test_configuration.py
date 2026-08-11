@@ -3,13 +3,15 @@ import unittest
 
 from tests.support import reset_framework_state
 
-from autumn.configuration import Configuration, source, Maple
+from autumn.configuration import Configuration, source, Maple, Theme
 from autumn.core.configuration.builtin import (
     ApplicationConfiguration,
     CORSConfiguration,
+    WebUIConfiguration,
     WebsocketConfiguration
 )
 from autumn.core.configuration.configuration import get_registered_configs
+from autumn.core.environment import Environment
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -26,6 +28,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn(CORSConfiguration, configs)
         self.assertIn(ApplicationConfiguration, configs)
         self.assertIn(WebsocketConfiguration, configs)
+        self.assertIn(WebUIConfiguration, configs)
 
     def test_custom_cors_configuration_overrides_builtin_registration(self) -> None:
         class CustomCORSConfiguration(CORSConfiguration):
@@ -67,3 +70,46 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn('Configuration', namespace)
         self.assertIn('source', namespace)
         self.assertIn('Maple', namespace)
+        self.assertIn('Theme', namespace)
+        self.assertIn('WebUIConfiguration', namespace)
+
+    def test_configuration_casts_tuple_of_environments(self) -> None:
+        class TestConfiguration(Configuration):
+            allowed_on: Maple['allowed.on', tuple[Environment, ...]]
+
+        TestConfiguration.__config_sources__ = [
+            type(
+                'InlineSource',
+                (),
+                {
+                    'name': 'inline',
+                    'get': lambda self, path: ['development', 'PRODUCTION']
+                }
+            )()
+        ]
+
+        configuration = TestConfiguration.build()
+
+        self.assertEqual(
+            configuration.allowed_on,
+            (Environment.DEVELOPMENT, Environment.PRODUCTION)
+        )
+
+    def test_configuration_casts_theme_enum(self) -> None:
+        class TestConfiguration(Configuration):
+            default_theme: Maple['default.theme', Theme]
+
+        TestConfiguration.__config_sources__ = [
+            type(
+                'InlineSource',
+                (),
+                {
+                    'name': 'inline',
+                    'get': lambda self, path: 'LIGHT'
+                }
+            )()
+        ]
+
+        configuration = TestConfiguration.build()
+
+        self.assertEqual(configuration.default_theme, Theme.LIGHT)

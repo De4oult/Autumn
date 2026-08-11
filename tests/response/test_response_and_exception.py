@@ -48,6 +48,17 @@ class ResponseAndExceptionTests(unittest.TestCase):
         self.assertIn('"name":"Leaf"', response.text)
         self.assertEqual(response.content_type, 'application/json')
 
+    def test_response_refreshes_cached_bytes_and_content_type_metadata(self) -> None:
+        response = HTMLResponse('first')
+        response.body = 'second'
+        response.content_type = 'text/custom; charset=utf-8'
+
+        self.assertEqual(response.body_as_bytes(), b'second')
+        self.assertIn(
+            (b'content-type', b'text/custom; charset=utf-8'),
+            response.headers_as_list()
+        )
+
     def test_json_response_serializes_decorated_objects_without_private_fields(self) -> None:
         response = JSONResponse({
             'user': SerializableUser(name = 'Anton', age = 18, password = 'qwerty123!')

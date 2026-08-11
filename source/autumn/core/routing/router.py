@@ -25,8 +25,18 @@ class Route:
         self.method = method.upper()
         self.path_template = path_template
         self.handler = handler
+        self.execution_plan = None
         self.is_static = '{' not in self.path_template and '}' not in self.path_template
         
+        parameter_offset = self.path_template.find('{')
+        literal_prefix = (
+            self.path_template[:parameter_offset].rstrip('/')
+            if parameter_offset >= 0
+            else self.path_template.rstrip('/')
+        )
+
+        self.dynamic_prefix = literal_prefix or None
+
         self.static_path = Router.normalize_static_path(self.path_template) if self.is_static else None
         
         (
@@ -108,6 +118,8 @@ class Router:
     def __init__(self):
         self.routes: list[Route] = []
         self.dynamic_routes_by_method: dict[str, list[Route]] = {}
+        self.dynamic_routes_by_method_prefix: dict[str, dict[str, list[Route]]] = {}
+        self.dynamic_fallback_routes_by_method: dict[str, list[Route]] = {}
         self.static_routes_by_method: dict[str, dict[str, Route]] = {}
 
     @staticmethod
@@ -122,6 +134,8 @@ class Router:
     def reset(self) -> None:
         self.routes.clear()
         self.dynamic_routes_by_method.clear()
+        self.dynamic_routes_by_method_prefix.clear()
+        self.dynamic_fallback_routes_by_method.clear()
         self.static_routes_by_method.clear()
         
     def add_route(self, method: str, path: str, handler: Callable) -> None:
@@ -134,6 +148,15 @@ class Router:
             return
 
         self.dynamic_routes_by_method.setdefault(route.method, []).append(route)
+
+        if route.dynamic_prefix is None:
+            self.dynamic_fallback_routes_by_method.setdefault(route.method, []).append(route)
+
+        else:
+            self.dynamic_routes_by_method_prefix.setdefault(route.method, {}).setdefault(
+                route.dynamic_prefix,
+                []
+            ).append(route)
 
     def add_websocket_route(self, path: str, handler: Callable) -> None:
         self.add_route('WS', path, handler)
@@ -150,7 +173,33 @@ class Router:
                 parameters = {}
             )
 
-        for route in self.dynamic_routes_by_method.get(method_key, []):
+        prefix_routes = self.dynamic_routes_by_method_prefix.get(method_key, {})
+        fallback = self.dynamic_fallback_routes_by_method.get(method_key, ())
+        normalized_path = path.rstrip('/') or '/'
+        probe = normalized_path
+
+        while True:
+            separator = probe.rfind('/')
+
+            if separator <= 0:
+                break
+
+            probe = probe[:separator]
+            candidates = prefix_routes.get(probe, ())
+
+            for route in candidates:
+                result = route.match(method_key, path)
+
+                if result is not None:
+                    _, parameters = result
+
+                    return RouteMatch(
+                        route      = route,
+                        handler    = route.handler,
+                        parameters = parameters
+                    )
+
+        for route in fallback:
             result = route.match(method_key, path)
 
             if result is not None:

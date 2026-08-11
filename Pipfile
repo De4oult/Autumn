@@ -7,7 +7,7 @@ name = "pypi"
 orjson = "*"
 pydantic = "*"
 colorama = "*"
-click = "*"
+click = ">=8.3.3"
 rich = "*"
 uvicorn = {extras = ["standard"], version = "*"}
 pytest = "*"
@@ -17,6 +17,7 @@ httpx = "*"
 [dev-packages]
 uvicorn = "*"
 build = "*"
+pip-audit = "*"
 
 [requires]
 python_version = "3.12"

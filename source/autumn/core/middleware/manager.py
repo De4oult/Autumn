@@ -22,11 +22,50 @@ class MiddlewareEntry:
     patterns: tuple[re.Pattern[str], ...]
 
 
+@dataclass(frozen = True)
+class MiddlewarePlan:
+    before: tuple[MiddlewareEntry, ...]
+    after: tuple[MiddlewareEntry, ...]
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.before and not self.after
+
+    async def execute(
+        self,
+        invoke: Callable[[Request], Awaitable[Response]],
+        request: Request
+    ) -> Response:
+        async def run_before(index: int, current_request: Request) -> Response:
+            if index == len(self.before):
+                return await invoke(current_request)
+
+            entry = self.before[index]
+
+            async def next_call(next_request: Request) -> Response:
+                return await run_before(index + 1, next_request)
+
+            return await entry.func(current_request, next_call)
+
+        response = await run_before(0, request)
+
+        for entry in self.after:
+            result = entry.func(request, response)
+
+            if inspect.isawaitable(result):
+                result = await result
+
+            if result is not None:
+                response = result
+
+        return response
+
+
 class MiddlewareManager:
     def __init__(self):
         self.before_middlewares: List[MiddlewareEntry] = []
         self.after_middlewares: List[MiddlewareEntry] = []
-        self.__selection_cache: dict[tuple[str, str], tuple[list[MiddlewareEntry], list[MiddlewareEntry]]] = {}
+        self.__selection_cache: dict[tuple[str, str], MiddlewarePlan] = {}
 
     def __register(
         self,
@@ -93,25 +132,26 @@ class MiddlewareManager:
         
         return True
 
-    def __select(self, path: str, method: str) -> tuple[list[MiddlewareEntry], list[MiddlewareEntry]]:
-        key = (path, method)
+    def compile(self, path: str, method: str) -> MiddlewarePlan:
+        key = (path, method.upper())
 
         if key in self.__selection_cache:
             return self.__selection_cache[key]
 
-        before = [
+        before = tuple(
             entry
             for entry in self.before_middlewares
             if self.__match(path, method, entry)
-        ]
-        after = [
+        )
+        after = tuple(
             entry
             for entry in self.after_middlewares
             if self.__match(path, method, entry)
-        ]
+        )
 
-        self.__selection_cache[key] = (before, after)
-        return before, after
+        plan = MiddlewarePlan(before = before, after = after)
+        self.__selection_cache[key] = plan
+        return plan
 
     def wrap(
         self,
@@ -119,34 +159,12 @@ class MiddlewareManager:
         path: str, 
         method: str
     ) -> Callable[[Request], Awaitable[Response]]:
-        selected_before, selected_after = self.__select(path, method)
+        plan = self.compile(path, method)
 
-        if not selected_before and not selected_after:
+        if plan.is_empty:
             return invoke
 
         async def wrapped(request: Request) -> Response:
-            call = invoke
-            
-            for entry in reversed(selected_before):
-                call = self.__wrap_before_middleware(entry.func, call)
+            return await plan.execute(invoke, request)
 
-            response = await call(request)
-
-            for entry in selected_after:
-                result = entry.func(request, response)
-
-                if inspect.isawaitable(result):
-                    result = await result
-
-                if result is not None:
-                    response = result
-
-            return response
-
-        return wrapped
-    
-    def __wrap_before_middleware(self, middleware: MiddlewareFunc, next_call: Callable[[Request], Awaitable[Response]]) -> Callable[[Request], Awaitable[Response]]:
-        async def wrapped(req: Request):
-            return await middleware(req, next_call)
-        
         return wrapped

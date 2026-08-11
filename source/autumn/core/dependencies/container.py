@@ -281,7 +281,7 @@ class Container:
             )
 
         try:
-            payload = await request.json()
+            payload = request.parse_json_bytes(raw)
 
         except Exception as error:
             raise HTTPException(
