@@ -90,3 +90,6 @@ def reset_registry() -> None:
     STARTUP_HOOKS.clear()
     SHUTDOWN_HOOKS.clear()
     MIDDLEWARES.clear()
+
+    from autumn.core.security.registry import reset_security_registry
+    reset_security_registry()

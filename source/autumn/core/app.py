@@ -13,6 +13,10 @@ from autumn.core.response.response import JSONResponse, Response
 from autumn.core.dependencies.scope import Scope
 from autumn.core.request.request import Request
 from autumn.core.routing.router import Router
+from autumn.core.security.configuration import SecurityConfiguration
+from autumn.core.security.principal import AnonymousPrincipal, Principal
+from autumn.core.security.registry import get_policy
+from autumn.core.security.requirements import SecurityRequirements, requirements_for
 
 from typing import Any, Callable, Optional, Sequence, get_type_hints
 from pathlib import Path
@@ -35,6 +39,7 @@ class HTTPExecutionPlan:
     is_controller: bool
     query_metadata: tuple[dict, ...]
     middleware: MiddlewarePlan
+    security: SecurityRequirements
 
 class Autumn:
     def __init__(
@@ -76,6 +81,7 @@ class Autumn:
         self.__application_configuration: Optional[ApplicationConfiguration] = None
         self.__cors_configuration: Optional[CORSConfiguration] = None
         self.__webui_configuration = None
+        self.__security_configuration: Optional[SecurityConfiguration] = None
         self.__http_handler_cache: dict[tuple[type, str], Callable] = {}
         self.__websocket_handler_cache: dict[tuple[type, str], Callable] = {}
         self.__controllers: list[type] = []
@@ -564,6 +570,7 @@ class Autumn:
 
         allowed_provider_keys = {
             Request,
+            Principal,
             WebSocket,
             *self.__controllers,
             *self.__service_classes,
@@ -605,6 +612,9 @@ class Autumn:
             if issubclass(configuration_class, WebUIConfiguration):
                 self.__webui_configuration = configuration
 
+            if issubclass(configuration_class, SecurityConfiguration):
+                self.__security_configuration = configuration
+
         self.__validate_environment_dependency_graph(leaf_provider_keys)
 
         self.__providers_synced = True
@@ -626,13 +636,36 @@ class Autumn:
                 if is_controller
                 else handler
             )
+            security_handler = (
+                getattr(handler[0], handler[1])
+                if is_controller
+                else handler_callable
+            )
+            security = requirements_for(
+                handler[0] if is_controller else None,
+                security_handler
+            )
+
+            if (
+                not security.public
+                and not security.required
+                and self.__security_configuration is not None
+                and self.__security_configuration.fallback_authenticated
+            ):
+                security = SecurityRequirements(authenticated = True)
+
+            for policy_name in security.policies:
+                if get_policy(policy_name) is None:
+                    raise RuntimeError(f'Unknown security policy: {policy_name}')
+
             route.execution_plan = HTTPExecutionPlan(
                 handler_callable = handler_callable,
                 is_controller = is_controller,
                 query_metadata = tuple(
                     getattr(handler_callable, '__query_parameters__', ())
                 ),
-                middleware = self.middleware.compile(route.path_template, route.method)
+                middleware = self.middleware.compile(route.path_template, route.method),
+                security = security
             )
 
     def __safe_type_hints(self, callable: Callable[..., Any]) -> dict[str, Any]:
@@ -733,7 +766,7 @@ class Autumn:
                 f'{self.__dependency_consumer_name(consumer)} requires {disabled_reason}'
             )
 
-        if key in (Request, WebSocket):
+        if key in (Request, Principal, WebSocket):
             return
 
         if key not in provider_keys:
@@ -1257,6 +1290,72 @@ class Autumn:
 
         return self.__normalize_response(result, plan.handler_callable)
 
+    async def __authenticate_request(self, request: Request) -> Principal:
+        configuration = self.__security_configuration
+
+        if configuration is None:
+            return AnonymousPrincipal()
+
+        for scheme in configuration.schemes:
+            principal = await scheme.authenticate(request)
+
+            if principal is not None:
+                if not isinstance(principal, Principal) or not principal.authenticated:
+                    raise TypeError('Authentication schemes must return an authenticated Principal or None')
+
+                return principal
+
+        return AnonymousPrincipal()
+
+    async def __authorize_request(
+        self,
+        plan: HTTPExecutionPlan,
+        request: Request,
+        context: ExecutionContext,
+        provided_kwargs: dict[str, Any]
+    ) -> None:
+        requirements = plan.security
+        principal: Principal = AnonymousPrincipal()
+        context.values[Principal] = principal
+        request.principal = principal
+
+        if requirements.public or not requirements.required:
+            return
+
+        principal = await self.__authenticate_request(request)
+        context.values[Principal] = principal
+        request.principal = principal
+
+        if not principal.authenticated:
+            configuration = self.__security_configuration
+            challenge = (
+                configuration.schemes[0].challenge
+                if configuration is not None and configuration.schemes
+                else 'Bearer'
+            )
+            raise HTTPException(
+                status = 401,
+                details = 'Authentication required',
+                headers = {'WWW-Authenticate': challenge}
+            )
+
+        if requirements.roles and requirements.roles.isdisjoint(principal.roles):
+            raise HTTPException(status = 403, details = 'Access denied')
+
+        if not requirements.permissions.issubset(principal.permissions):
+            raise HTTPException(status = 403, details = 'Access denied')
+
+        for policy_name in requirements.policies:
+            policy_callable = get_policy(policy_name)
+            allowed = await self.container.call(
+                policy_callable,
+                context = context,
+                provided_kwargs = provided_kwargs
+            )
+
+            if allowed is not True:
+                raise HTTPException(status = 403, details = 'Access denied')
+
     @staticmethod
     async def __send_response(send, response: Response) -> None:
         await send({
@@ -1643,6 +1742,13 @@ class Autumn:
                 provided_kwargs.update(
                     self.__resolve_query_kwargs(request, plan.query_metadata)
                 )
+
+            await self.__authorize_request(
+                plan,
+                request,
+                context,
+                provided_kwargs
+            )
 
             if plan.middleware.is_empty:
                 response = await self.__invoke_http_execution_plan(

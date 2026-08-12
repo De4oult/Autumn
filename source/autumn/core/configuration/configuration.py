@@ -31,8 +31,10 @@ class ConfigurationMeta(type):
         cls = super().__new__(meta_cls, name, bases, namespace)
 
         inherited_sources: List[ConfigurationSource] = []
+
         for b in reversed(cls.__mro__[1:]):
             inherited_sources.extend(getattr(b, '__config_sources__', []))
+
         cls.__config_sources__ = list(inherited_sources)
 
         fields: Dict[str, Any] = {}
@@ -54,10 +56,12 @@ class ConfigurationMeta(type):
                 for m in meta:
                     if isinstance(m, AliasMeta):
                         field_aliases[field_name] = Alias(path=m.path)
+
                     elif isinstance(m, Alias):
                         field_aliases[field_name] = m
 
                 maybe_value = getattr(b, '__dict__', {}).get(field_name, None)
+
                 if isinstance(maybe_value, Alias):
                     field_aliases[field_name] = maybe_value
 
@@ -109,6 +113,7 @@ class Configuration(metaclass=ConfigurationMeta):
 
                 try:
                     values[field_name] = cast_value(raw, field_type)
+                    
                 except AutumnConfigCastError as error:
                     raise AutumnConfigError(
                         f'[{cls.__name__}.{field_name}] cannot cast path \'{alias.path}\' '
@@ -132,7 +137,13 @@ def get_builtin_configurations() -> List[Type[Configuration]]:
 
     builtin_configurations: List[Type[Configuration]] = []
 
-    for builtin_name in ('CORSConfiguration', 'ApplicationConfiguration', 'WebsocketConfiguration', 'WebUIConfiguration'):
+    for builtin_name in (
+        'CORSConfiguration', 
+        'ApplicationConfiguration', 
+        'SecurityConfiguration', 
+        'WebsocketConfiguration', 
+        'WebUIConfiguration'
+    ):
         builtin_class = getattr(_builtin, builtin_name, None)
 
         if builtin_class is not None:

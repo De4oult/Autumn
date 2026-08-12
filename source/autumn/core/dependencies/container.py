@@ -8,6 +8,7 @@ from autumn.core.response.exception import HTTPException
 # Built-in Providers
 from autumn.core.websocket.websocket import WebSocket
 from autumn.core.request.request import Request
+from autumn.core.security.principal import Principal
 
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Type, TypeVar, get_type_hints
@@ -75,6 +76,12 @@ class Container:
         self.__providers[Request] = Provider(
             kind   = 'builtin',
             target = BuiltinProvider(Request, Scope.REQUEST),
+            scope  = Scope.REQUEST
+        )
+
+        self.__providers[Principal] = Provider(
+            kind   = 'builtin',
+            target = BuiltinProvider(Principal, Scope.REQUEST),
             scope  = Scope.REQUEST
         )
 
@@ -159,6 +166,7 @@ class Container:
         )
 
         self.__call_metadata_cache[cache_key] = metadata
+        
         return metadata
 
     def __get_inject_metadata(self, callable: Callable[..., Any], *, skip_self: bool = False) -> InjectMetadata:

@@ -14,6 +14,7 @@ from .core.configuration.decorators import (
     json, 
     yaml
 )
+from .core.security.configuration import SecurityConfiguration
 
 class __SourceNamespace:
     env:  Callable = staticmethod(env)
@@ -36,5 +37,6 @@ __all__ = (
     'ApplicationConfiguration',
     'CORSConfiguration',
     'WebUIConfiguration',
-    'WebsocketConfiguration'
+    'WebsocketConfiguration',
+    'SecurityConfiguration'
 )

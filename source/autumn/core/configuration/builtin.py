@@ -1,4 +1,4 @@
-from typing import Union, List, Tuple, Optional
+from typing import Any, Union, List, Tuple, Optional
 
 from autumn.core.configuration.configuration import Configuration
 from autumn.core.environment import Environment, Theme
@@ -33,6 +33,12 @@ class ApplicationConfiguration(Configuration):
 
     # One mebibyte by default. Set to None to explicitly allow unbounded bodies.
     max_request_body_bytes: Optional[int] = 1024 * 1024
+
+class SecurityConfiguration(Configuration):
+    __autumn_builtin_config__ = True
+
+    schemes: Tuple[Any, ...] = ()
+    fallback_authenticated: bool = False
 
 class WebsocketConfiguration(Configuration):
     __autumn_builtin_config__ = True

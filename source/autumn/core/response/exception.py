@@ -44,7 +44,7 @@ def _parse_accept_header(value: Optional[str]) -> list[tuple[str, float, int, in
     return parsed
 
 class HTTPException(Exception):    
-    def __init__(self, status: int = 500, title: str | None = None, details: str = None):
+    def __init__(self, status: int = 500, title: str | None = None, details: str = None, headers: Optional[dict[str, str]] = None):
         titles: dict[int, str] = {
             # 200 : 'You\'re still here, and the leaves are whispering yes',
             # 201 : 'Something new was born in this silence',
@@ -71,6 +71,7 @@ class HTTPException(Exception):
         self.status = status
         self.title = title if title else titles.get(self.status, 'Something')
         self.details = details or ''
+        self.headers = headers or {}
         
         self.response = self.to_response()
 
@@ -84,14 +85,18 @@ class HTTPException(Exception):
             details = self.details
         )
 
-        return HTMLResponse(html, status = self.status)
+        return HTMLResponse(
+            html, 
+            status = self.status, 
+            headers = self.headers
+        )
 
     def __render_json_response(self) -> JSONResponse:
         return JSONResponse({
             'status'  : self.status,
             'title'   : self.title,
             'details' : self.details
-        }, status = self.status)
+        }, status = self.status, headers = self.headers)
 
     def prefers_html(self, request: Optional[Any] = None) -> bool:
         if request is None or not hasattr(request, 'header'):

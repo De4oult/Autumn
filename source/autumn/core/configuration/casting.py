@@ -30,6 +30,7 @@ def deep_get(data: Any, path: str) -> Any:
                 return MISSING
 
             current = current[part]
+
             continue
 
         return MISSING
@@ -137,12 +138,12 @@ def cast_value(raw: Any, target_type: Any) -> Any:
             return bool(raw)
 
         if isinstance(raw, str):
-            v = raw.strip().lower()
+            val = raw.strip().lower()
 
-            if v in ('1', 'true', 'yes', 'y', 'on'):
+            if val in ('1', 'true', 'yes', 'y', 'on'):
                 return True
 
-            if v in ('0', 'false', 'no', 'n', 'off'):
+            if val in ('0', 'false', 'no', 'n', 'off'):
                 return False
             
         raise AutumnConfigCastError(f'Cannot cast {raw!r} to bool')
@@ -151,8 +152,8 @@ def cast_value(raw: Any, target_type: Any) -> Any:
         try:
             return target_type(raw)
         
-        except Exception as e:
-            raise AutumnConfigCastError(f'Cannot cast {raw!r} to {target_type}') from e
+        except Exception as exception:
+            raise AutumnConfigCastError(f'Cannot cast {raw!r} to {target_type}') from exception
 
     try:
         if isinstance(raw, target_type):

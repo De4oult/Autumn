@@ -4,7 +4,6 @@ from .core.documentation.decorators import (
     description
 )
 
-
 __all__ = (
     'tag',
     'summary',
