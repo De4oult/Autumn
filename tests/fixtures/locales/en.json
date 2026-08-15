@@ -1,0 +1,1 @@
+{"hello":{"message":"Hello {name}"},"cart":{"items":{"one":"{count} item","many":"{count} items"}}}

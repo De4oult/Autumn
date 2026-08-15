@@ -1,8 +1,8 @@
 from autumn.core.websocket.websocket import WebSocket, WebSocketDisconnect
-from autumn.core.configuration.builtin import ApplicationConfiguration, CORSConfiguration, WebUIConfiguration
+from autumn.core.configuration.builtin import ApplicationConfiguration, CORSConfiguration, LocalizationConfiguration, WebUIConfiguration
 from autumn.core.configuration.configuration import Configuration, get_registered_configs
 from autumn.core.dependencies import registry as dependency_registry
-from autumn.core.dependencies.container import Container, ExecutionContext
+from autumn.core.dependencies.container import Container, ExecutionContext, is_union_dependency, union_dependency_args
 from autumn.core.exception.exception import DependencyInjectionError
 from autumn.core.introspection import get_declared_body_parameter
 from autumn.core.serialization import value_supports_json_response
@@ -17,9 +17,11 @@ from autumn.core.security.configuration import SecurityConfiguration
 from autumn.core.security.principal import AnonymousPrincipal, Principal
 from autumn.core.security.registry import get_policy
 from autumn.core.security.requirements import SecurityRequirements, requirements_for
+from autumn.core.i18n import I18n, Locale, load_locale_messages, select_locale
 
 from typing import Any, Callable, Optional, Sequence, get_type_hints
 from pathlib import Path
+from uuid import uuid4
 from colorama import Fore
 from dataclasses import dataclass
 
@@ -80,6 +82,7 @@ class Autumn:
         self.container = Container()
         self.__application_configuration: Optional[ApplicationConfiguration] = None
         self.__cors_configuration: Optional[CORSConfiguration] = None
+        self.__localization_configuration: Optional[LocalizationConfiguration] = None
         self.__webui_configuration = None
         self.__security_configuration: Optional[SecurityConfiguration] = None
         self.__http_handler_cache: dict[tuple[type, str], Callable] = {}
@@ -92,6 +95,8 @@ class Autumn:
         self.__middleware_entries: list[tuple[str, Callable, Optional[str | Sequence[str]], Optional[str | Sequence[str]]]] = []
         self.__disabled_provider_reasons: dict[Any, str] = {}
         self.__disabled_definitions: set[Any] = set()
+        self.__provider_definitions: dict[Any, Any] = {}
+        self.__environment_dependency_warnings: set[str] = set()
 
         self.__providers_synced: bool = False
 
@@ -162,6 +167,11 @@ class Autumn:
 
         return allowed_on is None or self.environment in allowed_on
 
+    def __definition_is_allowed_for(self, definition, environment: Environment) -> bool:
+        allowed_on = self.__only_environments_for(definition)
+
+        return allowed_on is None or environment in allowed_on
+
     def __environment_label(self, environment: Environment) -> str:
         return environment.value if isinstance(environment, Environment) else str(environment)
 
@@ -190,6 +200,9 @@ class Autumn:
                 return None
 
         return definition if callable(definition) else None
+
+    def __warn(self, message: str) -> None:
+        print(Fore.YELLOW + '[AUTUMN]' + Fore.RESET + ': ' + message)
 
     def __record_disabled_definition(self, definition) -> None:
         self.__disabled_definitions.add(definition)
@@ -402,6 +415,12 @@ class Autumn:
             middleware_entries
         ) = dependency_registry.registered_definitions()
 
+        for definition in (*dependency_functions, *service_classes):
+            key = self.__provider_key_for_definition(definition)
+
+            if key is not None:
+                self.__provider_definitions[key] = definition
+
         for definition in (
             *configuration_classes,
             *controller_classes,
@@ -555,6 +574,7 @@ class Autumn:
 
         self.__application_configuration = None
         self.__cors_configuration = None
+        self.__localization_configuration = None
         self.__webui_configuration = None
         leaf_provider_keys: set[Any] = set()
 
@@ -570,6 +590,8 @@ class Autumn:
 
         allowed_provider_keys = {
             Request,
+            Locale,
+            I18n,
             Principal,
             WebSocket,
             *self.__controllers,
@@ -608,6 +630,9 @@ class Autumn:
 
             if issubclass(configuration_class, CORSConfiguration):
                 self.__cors_configuration = configuration
+
+            if issubclass(configuration_class, LocalizationConfiguration):
+                self.__localization_configuration = configuration
 
             if issubclass(configuration_class, WebUIConfiguration):
                 self.__webui_configuration = configuration
@@ -676,7 +701,13 @@ class Autumn:
             return {}
 
     def __dependency_key_available(self, key: Any, provider_keys: set[Any]) -> bool:
-        if key in (Request, WebSocket):
+        if is_union_dependency(key):
+            return any(
+                self.__dependency_key_available(candidate, provider_keys)
+                for candidate in union_dependency_args(key)
+            )
+
+        if key in (Request, Locale, I18n, Principal, WebSocket):
             return True
 
         if key in self.__disabled_provider_reasons:
@@ -690,9 +721,13 @@ class Autumn:
         *,
         skip_self: bool = False,
         provider_keys: set[Any],
-        provided_names: set[str] | None = None
+        provided_names: set[str] | None = None,
+        can_resolve_dependency: Callable[[Any], bool] | None = None
     ) -> list[Any]:
         provided_names = provided_names or set()
+        can_resolve_dependency = can_resolve_dependency or (
+            lambda key: self.__dependency_key_available(key, provider_keys)
+        )
 
         try:
             signature = inspect.signature(callable)
@@ -708,7 +743,7 @@ class Autumn:
                 callable,
                 provided_kwargs = {name: object() for name in provided_names},
                 skip_self = skip_self,
-                can_resolve_dependency = lambda key: self.__dependency_key_available(key, provider_keys),
+                can_resolve_dependency = can_resolve_dependency,
                 signature = signature,
                 hints = hints
             )
@@ -750,6 +785,80 @@ class Autumn:
     def __dependency_consumer_name(self, consumer: Any) -> str:
         return getattr(consumer, '__qualname__', None) or getattr(consumer, '__name__', None) or repr(consumer)
 
+    def __dependency_key_name(self, key: Any) -> str:
+        return getattr(key, '__qualname__', None) or getattr(key, '__name__', None) or repr(key)
+
+    def __dependency_environment_set(
+        self,
+        key: Any,
+        leaf_map: dict[Any, Callable[..., Any]]
+    ) -> set[Environment]:
+        definition = self.__provider_definitions.get(key, leaf_map.get(key, key))
+        allowed_on = self.__only_environments_for(definition)
+
+        if allowed_on is None:
+            return set(Environment)
+
+        return set(allowed_on)
+
+    def __validate_union_dependency_key(
+        self,
+        key: Any,
+        *,
+        consumer: Any,
+        provider_keys: set[Any],
+        leaf_map: dict[Any, Callable[..., Any]],
+        stack: tuple[Any, ...]
+    ) -> None:
+        candidates = union_dependency_args(key)
+
+        if len(candidates) < 2:
+            raise DependencyInjectionError(
+                f'{self.__dependency_consumer_name(consumer)} requires an invalid union dependency: {key!r}'
+            )
+
+        environment_sets = {
+            candidate: self.__dependency_environment_set(candidate, leaf_map)
+            for candidate in candidates
+        }
+
+        for index, left in enumerate(candidates):
+            for right in candidates[index + 1:]:
+                overlap = environment_sets[left] & environment_sets[right]
+
+                if overlap:
+                    environments = ', '.join(
+                        self.__environment_label(environment)
+                        for environment in sorted(overlap, key = lambda item: item.value)
+                    )
+                    raise DependencyInjectionError(
+                        f'{self.__dependency_consumer_name(consumer)} has overlapping @only environments '
+                        f'for union dependency {self.__dependency_key_name(left)} | {self.__dependency_key_name(right)}: '
+                        f'{environments}'
+                    )
+
+        active_candidates = tuple(
+            candidate
+            for candidate in candidates
+            if self.environment in environment_sets[candidate]
+        )
+
+        if not active_candidates:
+            candidate_names = ' | '.join(self.__dependency_key_name(candidate) for candidate in candidates)
+            raise DependencyInjectionError(
+                f'{self.__dependency_consumer_name(consumer)} requires {candidate_names}, '
+                f'but no union dependency is active for {self.environment.value}'
+            )
+
+        for candidate in active_candidates:
+            self.__validate_dependency_key(
+                candidate,
+                consumer = consumer,
+                provider_keys = provider_keys,
+                leaf_map = leaf_map,
+                stack = stack
+            )
+
     def __validate_dependency_key(
         self,
         key: Any,
@@ -759,6 +868,16 @@ class Autumn:
         leaf_map: dict[Any, Callable[..., Any]],
         stack: tuple[Any, ...]
     ) -> None:
+        if is_union_dependency(key):
+            self.__validate_union_dependency_key(
+                key,
+                consumer = consumer,
+                provider_keys = provider_keys,
+                leaf_map = leaf_map,
+                stack = stack
+            )
+            return
+
         disabled_reason = self.__disabled_provider_reasons.get(key)
 
         if disabled_reason is not None:
@@ -766,14 +885,12 @@ class Autumn:
                 f'{self.__dependency_consumer_name(consumer)} requires {disabled_reason}'
             )
 
-        if key in (Request, Principal, WebSocket):
+        if key in (Request, Locale, I18n, Principal, WebSocket):
             return
 
         if key not in provider_keys:
-            key_name = getattr(key, '__qualname__', None) or getattr(key, '__name__', None) or repr(key)
-
             raise DependencyInjectionError(
-                f'{self.__dependency_consumer_name(consumer)} requires {key_name}, but no provider is registered'
+                f'{self.__dependency_consumer_name(consumer)} requires {self.__dependency_key_name(key)}, but no provider is registered'
             )
 
         self.__validate_provider_key(
@@ -791,7 +908,7 @@ class Autumn:
         leaf_map: dict[Any, Callable[..., Any]],
         stack: tuple[Any, ...] = ()
     ) -> None:
-        if key in (Request, WebSocket) or key in self.__configuration_classes:
+        if key in (Request, Locale, I18n, Principal, WebSocket) or key in self.__configuration_classes:
             return
 
         if key in stack:
@@ -904,6 +1021,218 @@ class Autumn:
                 leaf_map = leaf_map
             )
 
+        self.__warn_about_inactive_environment_dependency_graphs()
+
+    def __dependency_key_available_for_environment(self, key: Any, provider_keys: set[Any]) -> bool:
+        if is_union_dependency(key):
+            return any(
+                self.__dependency_key_available_for_environment(candidate, provider_keys)
+                for candidate in union_dependency_args(key)
+            )
+
+        if key in (Request, Locale, I18n, Principal, WebSocket):
+            return True
+
+        return key in provider_keys
+
+    def __provider_keys_for_environment(
+        self,
+        environment: Environment,
+        dependency_functions: Sequence[Callable[..., Any]],
+        service_classes: Sequence[type],
+        configuration_classes: Sequence[type[Configuration]]
+    ) -> tuple[set[Any], dict[Any, Callable[..., Any]]]:
+        leaf_map: dict[Any, Callable[..., Any]] = {}
+
+        for func in dependency_functions:
+            if not self.__definition_is_allowed_for(func, environment):
+                continue
+
+            key = self.__provider_key_for_definition(func)
+
+            if key is not None:
+                leaf_map[key] = func
+
+        provider_keys = {
+            Request,
+            Locale,
+            I18n,
+            Principal,
+            WebSocket,
+            *(
+                service_class
+                for service_class in service_classes
+                if self.__definition_is_allowed_for(service_class, environment)
+            ),
+            *(
+                configuration_class
+                for configuration_class in configuration_classes
+                if self.__definition_is_allowed_for(configuration_class, environment)
+            ),
+            *leaf_map.keys()
+        }
+
+        return provider_keys, leaf_map
+
+    def __environment_dependency_error(
+        self,
+        key: Any,
+        *,
+        environment: Environment,
+        consumer: Any,
+        provider_keys: set[Any],
+        leaf_map: dict[Any, Callable[..., Any]],
+        stack: tuple[Any, ...]
+    ) -> str | None:
+        if is_union_dependency(key):
+            candidates = union_dependency_args(key)
+            environment_sets = {
+                candidate: self.__dependency_environment_set(candidate, leaf_map)
+                for candidate in candidates
+            }
+            active_candidates = tuple(
+                candidate
+                for candidate in candidates
+                if environment in environment_sets[candidate]
+            )
+
+            if not active_candidates:
+                candidate_names = ' | '.join(self.__dependency_key_name(candidate) for candidate in candidates)
+                return (
+                    f'{self.__dependency_consumer_name(consumer)} requires {candidate_names}, '
+                    f'but no union dependency is active for {environment.value}'
+                )
+
+            for candidate in active_candidates:
+                error = self.__environment_dependency_error(
+                    candidate,
+                    environment = environment,
+                    consumer = consumer,
+                    provider_keys = provider_keys,
+                    leaf_map = leaf_map,
+                    stack = stack
+                )
+
+                if error is not None:
+                    return error
+
+            return None
+
+        if key in (Request, Locale, I18n, Principal, WebSocket) or key in self.__configuration_classes:
+            return None
+
+        if key not in provider_keys:
+            definition = self.__provider_definitions.get(key, leaf_map.get(key, key))
+            allowed_on = self.__only_environments_for(definition)
+
+            if allowed_on is not None and environment not in allowed_on:
+                allowed = ', '.join(self.__environment_label(item) for item in allowed_on)
+                return (
+                    f'{self.__dependency_consumer_name(consumer)} requires {self.__dependency_key_name(key)}, '
+                    f'but it is only allowed on {allowed}'
+                )
+
+            return (
+                f'{self.__dependency_consumer_name(consumer)} requires {self.__dependency_key_name(key)}, '
+                f'but no provider is registered for {environment.value}'
+            )
+
+        if key in stack:
+            return None
+
+        definition = self.__provider_definitions.get(key, leaf_map.get(key, key))
+        provider_meta = getattr(definition, '__autumn_provider__', None)
+
+        if inspect.isclass(definition) and provider_meta and provider_meta[0] == 'class':
+            callable = definition.__init__
+            dependencies = self.__callable_dependency_keys(
+                callable,
+                skip_self = True,
+                provider_keys = provider_keys,
+                can_resolve_dependency = lambda dependency: self.__dependency_key_available_for_environment(dependency, provider_keys)
+            )
+
+        elif key in leaf_map:
+            callable = leaf_map[key]
+            dependencies = self.__callable_dependency_keys(
+                callable,
+                provider_keys = provider_keys,
+                can_resolve_dependency = lambda dependency: self.__dependency_key_available_for_environment(dependency, provider_keys)
+            )
+
+        else:
+            return None
+
+        for dependency in dependencies:
+            error = self.__environment_dependency_error(
+                dependency,
+                environment = environment,
+                consumer = callable,
+                provider_keys = provider_keys,
+                leaf_map = leaf_map,
+                stack = (*stack, key)
+            )
+
+            if error is not None:
+                return error
+
+        return None
+
+    def __warn_about_inactive_environment_dependency_graphs(self) -> None:
+        (
+            _,
+            _,
+            dependency_functions,
+            service_classes,
+            configuration_classes,
+            *_rest
+        ) = dependency_registry.registered_definitions()
+
+        dependency_functions = tuple(dependency_functions)
+        service_classes = tuple(service_classes)
+        configuration_classes = tuple(configuration_classes)
+
+        for environment in Environment:
+            if environment == self.environment:
+                continue
+
+            provider_keys, leaf_map = self.__provider_keys_for_environment(
+                environment,
+                dependency_functions,
+                service_classes,
+                configuration_classes
+            )
+
+            active_service_classes = tuple(
+                service_class
+                for service_class in service_classes
+                if self.__definition_is_allowed_for(service_class, environment)
+            )
+
+            for provider_key in (*active_service_classes, *leaf_map.keys()):
+                error = self.__environment_dependency_error(
+                    provider_key,
+                    environment = environment,
+                    consumer = provider_key,
+                    provider_keys = provider_keys,
+                    leaf_map = leaf_map,
+                    stack = ()
+                )
+
+                if error is None:
+                    continue
+
+                warning = (
+                    f'@only dependency graph warning for {environment.value}: {error}. '
+                    f'This application can start on {self.environment.value}, but may fail on {environment.value}.'
+                )
+
+                if warning in self.__environment_dependency_warnings:
+                    continue
+
+                self.__environment_dependency_warnings.add(warning)
+                self.__warn(warning)
+
     def __normalize_response(self, result, handler_callable) -> Response:
         if isinstance(result, Response):
             return result
@@ -912,6 +1241,41 @@ class Autumn:
             return JSONResponse(result)
 
         raise TypeError(f'Handler returned unsupported result type: {type(result).__name__}')
+
+    def __resolve_request_id(self, request: Request) -> str:
+        request_id = (
+            request.header('x-request-id')
+            or request.header('x-correlation-id')
+            or uuid4().hex
+        )
+        request.request_id = request_id
+        return request_id
+
+    def __configure_i18n_context(self, request: Request, context: ExecutionContext) -> None:
+        configuration = self.__localization_configuration or LocalizationConfiguration.build()
+        supported_locales = tuple(str(locale) for locale in configuration.supported_locales)
+        default_locale = str(configuration.default_locale)
+
+        if default_locale not in supported_locales:
+            supported_locales = (*supported_locales, default_locale)
+
+        locale_code = select_locale(
+            request,
+            supported_locales = supported_locales,
+            default_locale = default_locale,
+            header = configuration.source_header
+        )
+        locale = Locale(locale_code)
+        i18n = I18n(
+            locale,
+            load_locale_messages(configuration.locales, locale_code),
+            configuration.plural_rules
+        )
+
+        request.locale = locale
+        request.i18n = i18n
+        context.values[Locale] = locale
+        context.values[I18n] = i18n
 
     def __internal_error_details(self, error: Exception) -> str:
         if self.environment == Environment.PRODUCTION:
@@ -1688,13 +2052,17 @@ class Autumn:
             )
         )
         request.app = self
+        request_id = self.__resolve_request_id(request)
 
         if self.__is_cors_preflight(request):
             try:
                 response = Response(
                     body = '',
                     status = 204,
-                    headers = self.__build_cors_headers(request, preflight = True)
+                    headers = {
+                        'X-Request-ID': request_id,
+                        **self.__build_cors_headers(request, preflight = True)
+                    }
                 )
 
             except HTTPException as error:
@@ -1725,6 +2093,7 @@ class Autumn:
             context = ExecutionContext()
             context.values[Request] = request
             request._autumn_execution_context = context
+            self.__configure_i18n_context(request, context)
 
             plan = match.route.execution_plan
 
@@ -1789,5 +2158,6 @@ class Autumn:
             response,
             self.__build_cors_headers(request)
         )
+        response.headers.setdefault('X-Request-ID', request_id)
         
         await self.__send_response(send, response)

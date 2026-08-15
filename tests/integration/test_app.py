@@ -1,4 +1,6 @@
 import unittest
+import contextlib
+import io
 from pathlib import Path
 
 from tests.support import asgi_lifespan, asgi_request, reset_framework_state, run_async
@@ -201,6 +203,52 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(html_response.status, 418)
         self.assertTrue(html_response.headers['content-type'].startswith('text/html'))
         self.assertIn('short and stout', html_response.text)
+
+    def test_app_adds_request_id_header_to_successful_responses(self) -> None:
+        app = Autumn()
+
+        @REST(prefix = '/trace')
+        class TraceController:
+            @get('/')
+            async def index(self) -> dict:
+                return {'ok': True}
+
+        response = run_async(
+            asgi_request(
+                app,
+                path = '/trace',
+                headers = {'x-request-id': 'req-123'}
+            )
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers['X-Request-ID'], 'req-123')
+
+    def test_app_adds_request_id_and_meta_to_http_exception_response(self) -> None:
+        app = Autumn()
+
+        @REST(prefix = '/trace')
+        class TraceController:
+            @get('/failure')
+            async def failure(self):
+                raise HTTPException(
+                    status = 409,
+                    details = 'conflict',
+                    meta = {'reason': 'duplicate'}
+                )
+
+        response = run_async(
+            asgi_request(
+                app,
+                path = '/trace/failure',
+                headers = {'x-request-id': 'req-456'}
+            )
+        )
+
+        self.assertEqual(response.status, 409)
+        self.assertEqual(response.headers['X-Request-ID'], 'req-456')
+        self.assertEqual(response.json()['request_id'], 'req-456')
+        self.assertEqual(response.json()['meta'], {'reason': 'duplicate'})
 
     def test_default_cors_rejects_unknown_origin_preflight(self) -> None:
         app = Autumn()
@@ -466,6 +514,220 @@ class AppIntegrationTests(unittest.TestCase):
             )
 
         self.assertIn('MockGateway is only allowed on development', str(raised.exception))
+
+    def test_only_union_dependency_selects_provider_for_current_environment(self) -> None:
+        @only(Environment.DEVELOPMENT)
+        @service
+        class MockGateway:
+            def name(self) -> str:
+                return 'mock'
+
+        @only(Environment.PRODUCTION)
+        @service
+        class LiveGateway:
+            def name(self) -> str:
+                return 'live'
+
+        @service
+        class CheckoutService:
+            def __init__(self, gateway: MockGateway | LiveGateway):
+                self.gateway = gateway
+
+            def gateway_name(self) -> str:
+                return self.gateway.name()
+
+        @REST(prefix = '/checkout')
+        class CheckoutController:
+            def __init__(self, checkout: CheckoutService):
+                self.checkout = checkout
+
+            @get('/gateway')
+            async def gateway(self) -> dict:
+                return {'gateway': self.checkout.gateway_name()}
+
+        production_app = Autumn(environment = Environment.PRODUCTION)
+        production_response = run_async(
+            asgi_request(
+                production_app,
+                method = 'GET',
+                path = '/checkout/gateway'
+            )
+        )
+
+        development_app = Autumn(environment = Environment.DEVELOPMENT)
+        development_response = run_async(
+            asgi_request(
+                development_app,
+                method = 'GET',
+                path = '/checkout/gateway'
+            )
+        )
+
+        self.assertEqual(production_response.status, 200)
+        self.assertEqual(production_response.json(), {'gateway': 'live'})
+        self.assertEqual(development_response.status, 200)
+        self.assertEqual(development_response.json(), {'gateway': 'mock'})
+
+    def test_only_union_dependency_supports_leaf_providers(self) -> None:
+        class MockGateway:
+            def name(self) -> str:
+                return 'mock'
+
+        class LiveGateway:
+            def name(self) -> str:
+                return 'live'
+
+        @only(Environment.DEVELOPMENT)
+        @leaf
+        async def mock_gateway() -> MockGateway:
+            return MockGateway()
+
+        @only(Environment.PRODUCTION)
+        @leaf
+        async def live_gateway() -> LiveGateway:
+            return LiveGateway()
+
+        @service
+        class CheckoutService:
+            def __init__(self, gateway: MockGateway | LiveGateway):
+                self.gateway = gateway
+
+            def gateway_name(self) -> str:
+                return self.gateway.name()
+
+        @REST(prefix = '/checkout')
+        class CheckoutController:
+            def __init__(self, checkout: CheckoutService):
+                self.checkout = checkout
+
+            @get('/gateway')
+            async def gateway(self) -> dict:
+                return {'gateway': self.checkout.gateway_name()}
+
+        app = Autumn(environment = Environment.PRODUCTION)
+        response = run_async(
+            asgi_request(
+                app,
+                method = 'GET',
+                path = '/checkout/gateway'
+            )
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.json(), {'gateway': 'live'})
+
+    def test_only_union_dependency_rejects_overlapping_environments(self) -> None:
+        app = Autumn(environment = Environment.LOCAL)
+
+        @only(Environment.DEVELOPMENT)
+        @service
+        class FirstGateway:
+            pass
+
+        @only(Environment.DEVELOPMENT, Environment.LOCAL)
+        @service
+        class SecondGateway:
+            pass
+
+        @service
+        class CheckoutService:
+            def __init__(self, gateway: FirstGateway | SecondGateway):
+                self.gateway = gateway
+
+        @REST(prefix = '/checkout')
+        class CheckoutController:
+            def __init__(self, checkout: CheckoutService):
+                self.checkout = checkout
+
+            @get('/status')
+            async def status(self) -> dict:
+                return {'ok': True}
+
+        with self.assertRaises(DependencyInjectionError) as raised:
+            run_async(
+                asgi_request(
+                    app,
+                    method = 'GET',
+                    path = '/checkout/status'
+                )
+            )
+
+        self.assertIn('overlapping @only environments', str(raised.exception))
+        self.assertIn('development', str(raised.exception))
+
+    def test_only_union_dependency_rejects_missing_active_environment(self) -> None:
+        app = Autumn(environment = Environment.PRODUCTION)
+
+        @only(Environment.DEVELOPMENT)
+        @service
+        class MockGateway:
+            pass
+
+        @only(Environment.LOCAL)
+        @service
+        class LocalGateway:
+            pass
+
+        @service
+        class CheckoutService:
+            def __init__(self, gateway: MockGateway | LocalGateway):
+                self.gateway = gateway
+
+        @REST(prefix = '/checkout')
+        class CheckoutController:
+            def __init__(self, checkout: CheckoutService):
+                self.checkout = checkout
+
+            @get('/status')
+            async def status(self) -> dict:
+                return {'ok': True}
+
+        with self.assertRaises(DependencyInjectionError) as raised:
+            run_async(
+                asgi_request(
+                    app,
+                    method = 'GET',
+                    path = '/checkout/status'
+                )
+            )
+
+        self.assertIn('no union dependency is active for production', str(raised.exception))
+
+    def test_only_warns_when_other_environment_dependency_graph_would_fail(self) -> None:
+        app = Autumn(environment = Environment.LOCAL)
+
+        @only(Environment.LOCAL)
+        @service
+        class LocalGateway:
+            pass
+
+        @only(Environment.PRODUCTION)
+        @service
+        class ProductionCheckoutService:
+            def __init__(self, gateway: LocalGateway):
+                self.gateway = gateway
+
+        @REST(prefix = '/health')
+        class HealthController:
+            @get('/')
+            async def index(self) -> dict:
+                return {'ok': True}
+
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            response = run_async(
+                asgi_request(
+                    app,
+                    method = 'GET',
+                    path = '/health'
+                )
+            )
+
+        self.assertEqual(response.status, 200)
+        self.assertIn('@only dependency graph warning for production', output.getvalue())
+        self.assertIn('ProductionCheckoutService.__init__ requires', output.getvalue())
+        self.assertIn('LocalGateway', output.getvalue())
 
     def test_independent_decorators_register_runtime_objects(self) -> None:
         app = Autumn()

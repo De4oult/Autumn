@@ -1,7 +1,8 @@
-from typing import Any, Union, List, Tuple, Optional
+from typing import Any, Callable, Union, List, Tuple, Optional
 
 from autumn.core.configuration.configuration import Configuration
 from autumn.core.environment import Environment, Theme
+from autumn.core.resources import Resources
 
 class CORSConfiguration(Configuration):
     __autumn_builtin_config__ = True
@@ -39,6 +40,15 @@ class SecurityConfiguration(Configuration):
 
     schemes: Tuple[Any, ...] = ()
     fallback_authenticated: bool = False
+
+class LocalizationConfiguration(Configuration):
+    __autumn_builtin_config__ = True
+
+    supported_locales: Tuple[str, ...] = ('en',)
+    default_locale: str = 'en'
+    source_header: str = 'Accept-Language'
+    locales: Resources = Resources('resources/locales')
+    plural_rules: dict[str, Callable[[int | float], str]] = {}
 
 class WebsocketConfiguration(Configuration):
     __autumn_builtin_config__ = True

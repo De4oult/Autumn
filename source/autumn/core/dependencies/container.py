@@ -9,14 +9,28 @@ from autumn.core.response.exception import HTTPException
 from autumn.core.websocket.websocket import WebSocket
 from autumn.core.request.request import Request
 from autumn.core.security.principal import Principal
+from autumn.core.i18n import I18n, Locale
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Type, TypeVar, get_type_hints
+from types import UnionType
+from typing import Any, Callable, Dict, Optional, Type, TypeVar, Union, get_args, get_origin, get_type_hints
 from pydantic import TypeAdapter, ValidationError
 
 import inspect
 
 T = TypeVar('T')
+NONE_TYPE = type(None)
+
+
+def is_union_dependency(key: Any) -> bool:
+    return get_origin(key) in (Union, UnionType)
+
+
+def union_dependency_args(key: Any) -> tuple[Any, ...]:
+    if not is_union_dependency(key):
+        return ()
+
+    return tuple(argument for argument in get_args(key) if argument is not NONE_TYPE)
 
 @dataclass
 class Provider:
@@ -82,6 +96,18 @@ class Container:
         self.__providers[Principal] = Provider(
             kind   = 'builtin',
             target = BuiltinProvider(Principal, Scope.REQUEST),
+            scope  = Scope.REQUEST
+        )
+
+        self.__providers[Locale] = Provider(
+            kind   = 'builtin',
+            target = BuiltinProvider(Locale, Scope.REQUEST),
+            scope  = Scope.REQUEST
+        )
+
+        self.__providers[I18n] = Provider(
+            kind   = 'builtin',
+            target = BuiltinProvider(I18n, Scope.REQUEST),
             scope  = Scope.REQUEST
         )
 
@@ -267,8 +293,47 @@ class Container:
 
         raise DependencyProviderError(f'No provider for: {key}')
 
+    def __select_union_dependency_key(self, key: Any) -> Any:
+        candidates = union_dependency_args(key)
+
+        if not candidates:
+            return key
+
+        available: list[Any] = []
+
+        for candidate in candidates:
+            try:
+                self.__get_provider(candidate)
+                available.append(candidate)
+
+            except (DependencyProviderError, TypeError):
+                continue
+
+        if len(available) == 1:
+            return available[0]
+
+        names = ' | '.join(
+            getattr(candidate, '__qualname__', None)
+            or getattr(candidate, '__name__', None)
+            or repr(candidate)
+            for candidate in candidates
+        )
+
+        if not available:
+            raise DependencyProviderError(f'No active provider for union dependency: {names}')
+
+        active_names = ', '.join(
+            getattr(candidate, '__qualname__', None)
+            or getattr(candidate, '__name__', None)
+            or repr(candidate)
+            for candidate in available
+        )
+
+        raise DependencyProviderError(f'Union dependency has multiple active providers: {active_names}')
+
     def __can_resolve_dependency(self, key: Any) -> bool:
         try:
+            key = self.__select_union_dependency_key(key)
             self.__get_provider(key)
 
             return True
@@ -315,6 +380,7 @@ class Container:
             ) from error
     
     async def resolve(self, key: Type[Any], context: Optional[ExecutionContext] = None) -> Any:
+        key = self.__select_union_dependency_key(key)
         provider = self.__get_provider(key)
 
         if provider.kind == 'builtin':

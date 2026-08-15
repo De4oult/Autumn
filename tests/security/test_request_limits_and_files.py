@@ -71,10 +71,11 @@ class RequestBodyLimitTests(unittest.TestCase):
 class RootedFileResponseTests(unittest.TestCase):
     def test_from_root_serves_a_file_inside_root(self) -> None:
         root = Path(__file__).resolve().parents[1] / 'fixtures' / 'file_root'
+        file = root / 'hello.txt'
 
         response = FileResponse.from_root(root, 'hello.txt')
 
-        self.assertEqual(response.body, b'hello\n')
+        self.assertEqual(response.body, file.read_bytes())
 
     def test_from_root_rejects_path_traversal(self) -> None:
         root = Path(__file__).resolve().parents[1] / 'fixtures' / 'file_root'

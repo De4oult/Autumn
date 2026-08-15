@@ -6,6 +6,7 @@ from .core.environment import Theme
 from .core.configuration.builtin import (
     ApplicationConfiguration,
     CORSConfiguration,
+    LocalizationConfiguration,
     WebUIConfiguration,
     WebsocketConfiguration
 )
@@ -36,6 +37,7 @@ __all__ = (
     # Built-in configs
     'ApplicationConfiguration',
     'CORSConfiguration',
+    'LocalizationConfiguration',
     'WebUIConfiguration',
     'WebsocketConfiguration',
     'SecurityConfiguration'

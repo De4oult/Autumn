@@ -7,6 +7,7 @@ from autumn.configuration import Configuration, source, Maple, Theme
 from autumn.core.configuration.builtin import (
     ApplicationConfiguration,
     CORSConfiguration,
+    LocalizationConfiguration,
     WebUIConfiguration,
     WebsocketConfiguration
 )
@@ -27,6 +28,7 @@ class ConfigurationTests(unittest.TestCase):
 
         self.assertIn(CORSConfiguration, configs)
         self.assertIn(ApplicationConfiguration, configs)
+        self.assertIn(LocalizationConfiguration, configs)
         self.assertIn(WebsocketConfiguration, configs)
         self.assertIn(WebUIConfiguration, configs)
 
@@ -71,6 +73,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn('source', namespace)
         self.assertIn('Maple', namespace)
         self.assertIn('Theme', namespace)
+        self.assertIn('LocalizationConfiguration', namespace)
         self.assertIn('WebUIConfiguration', namespace)
 
     def test_configuration_casts_tuple_of_environments(self) -> None:

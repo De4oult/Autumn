@@ -44,15 +44,18 @@ def _parse_accept_header(value: Optional[str]) -> list[tuple[str, float, int, in
     return parsed
 
 class HTTPException(Exception):    
-    def __init__(self, status: int = 500, title: str | None = None, details: str = None, headers: Optional[dict[str, str]] = None):
+    def __init__(
+        self,
+        status: int = 500,
+        title: str | None = None,
+        details: str = None,
+        headers: Optional[dict[str, str]] = None,
+        *,
+        request_id: str | None = None,
+        meta: Optional[dict[str, Any]] = None,
+        body: Optional[dict[str, Any]] = None
+    ):
         titles: dict[int, str] = {
-            # 200 : 'You\'re still here, and the leaves are whispering yes',
-            # 201 : 'Something new was born in this silence',
-            # 204 : 'Just silence, and nothing more.',
-
-            # 301 : 'I\'m gone forever, but you\'ll find me there',
-            # 302 : 'The path has changed, but the autumn is the same',
-
             400 : 'The leaf fell off before the wind realized',
             401 : 'The smell of a campfire, but the door is still locked',
             403 : 'The path is blocked, but you knew it in advance',
@@ -72,10 +75,42 @@ class HTTPException(Exception):
         self.title = title if title else titles.get(self.status, 'Something')
         self.details = details or ''
         self.headers = headers or {}
+        self.request_id = request_id
+        self.meta = meta or {}
+        self.body = body
         
         self.response = self.to_response()
 
-    def __render_html_response(self) -> HTMLResponse:
+    def __headers(self, request: Optional[Any] = None) -> dict[str, str]:
+        headers = dict(self.headers)
+        request_id = self.request_id or getattr(request, 'request_id', None)
+
+        if request_id is not None:
+            headers.setdefault('X-Request-ID', str(request_id))
+
+        return headers
+
+    def __body(self, request: Optional[Any] = None) -> dict[str, Any]:
+        if self.body is not None:
+            payload = dict(self.body)
+        else:
+            payload = {
+                'status'  : self.status,
+                'title'   : self.title,
+                'details' : self.details
+            }
+
+        request_id = self.request_id or getattr(request, 'request_id', None)
+
+        if request_id is not None:
+            payload.setdefault('request_id', str(request_id))
+
+        if self.meta:
+            payload.setdefault('meta', self.meta)
+
+        return payload
+
+    def __render_html_response(self, request: Optional[Any] = None) -> HTMLResponse:
         template_path: Path = Path(__file__).resolve().parents[2] / 'templates' / 'error.html'
         error_template = template_path.read_text(encoding = 'utf-8')
 
@@ -88,15 +123,15 @@ class HTTPException(Exception):
         return HTMLResponse(
             html, 
             status = self.status, 
-            headers = self.headers
+            headers = self.__headers(request)
         )
 
-    def __render_json_response(self) -> JSONResponse:
-        return JSONResponse({
-            'status'  : self.status,
-            'title'   : self.title,
-            'details' : self.details
-        }, status = self.status, headers = self.headers)
+    def __render_json_response(self, request: Optional[Any] = None) -> JSONResponse:
+        return JSONResponse(
+            self.__body(request),
+            status = self.status,
+            headers = self.__headers(request)
+        )
 
     def prefers_html(self, request: Optional[Any] = None) -> bool:
         if request is None or not hasattr(request, 'header'):
@@ -134,6 +169,6 @@ class HTTPException(Exception):
 
     def to_response(self, request: Optional[Any] = None) -> Response:
         if self.prefers_html(request):
-            return self.__render_html_response()
+            return self.__render_html_response(request)
 
-        return self.__render_json_response()
+        return self.__render_json_response(request)

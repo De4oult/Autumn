@@ -141,6 +141,7 @@ def get_builtin_configurations() -> List[Type[Configuration]]:
         'CORSConfiguration', 
         'ApplicationConfiguration', 
         'SecurityConfiguration', 
+        'LocalizationConfiguration', 
         'WebsocketConfiguration', 
         'WebUIConfiguration'
     ):
