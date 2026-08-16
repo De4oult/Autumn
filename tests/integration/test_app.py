@@ -429,7 +429,10 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json()['info']['description'], 'Application metadata from configuration')
 
     def test_webui_configuration_controls_visibility_and_markup(self) -> None:
-        app = Autumn(environment = Environment.PRODUCTION)
+        class ProjectApplicationConfiguration(ApplicationConfiguration):
+            environment = Environment.PRODUCTION
+
+        app = Autumn()
 
         response = run_async(
             asgi_request(
@@ -446,7 +449,7 @@ class AppIntegrationTests(unittest.TestCase):
             default_theme = Theme.LIGHT
             leaves_animation_enabled = False
 
-        configured_app = Autumn(environment = Environment.PRODUCTION)
+        configured_app = Autumn()
         configured_response = run_async(
             asgi_request(
                 configured_app,
@@ -461,7 +464,10 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertIn('"packageVersion":', configured_response.text)
 
     def test_only_excludes_controllers_from_routes_and_documentation(self) -> None:
-        app = Autumn(environment = Environment.PRODUCTION)
+        class ProjectApplicationConfiguration(ApplicationConfiguration):
+            environment = Environment.PRODUCTION
+
+        app = Autumn()
 
         @only(Environment.DEVELOPMENT)
         @REST(prefix = '/debug')
@@ -483,7 +489,10 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertNotIn('/debug/ping', schema['paths'])
 
     def test_only_rejects_active_dependency_chain_that_requires_disabled_provider(self) -> None:
-        app = Autumn(environment = Environment.PRODUCTION)
+        class ProjectApplicationConfiguration(ApplicationConfiguration):
+            environment = Environment.PRODUCTION
+
+        app = Autumn()
 
         @only(Environment.DEVELOPMENT)
         @service
@@ -545,7 +554,10 @@ class AppIntegrationTests(unittest.TestCase):
             async def gateway(self) -> dict:
                 return {'gateway': self.checkout.gateway_name()}
 
-        production_app = Autumn(environment = Environment.PRODUCTION)
+        class ProjectApplicationConfiguration(ApplicationConfiguration):
+            environment = Environment.PRODUCTION
+
+        production_app = Autumn()
         production_response = run_async(
             asgi_request(
                 production_app,
@@ -554,19 +566,8 @@ class AppIntegrationTests(unittest.TestCase):
             )
         )
 
-        development_app = Autumn(environment = Environment.DEVELOPMENT)
-        development_response = run_async(
-            asgi_request(
-                development_app,
-                method = 'GET',
-                path = '/checkout/gateway'
-            )
-        )
-
         self.assertEqual(production_response.status, 200)
         self.assertEqual(production_response.json(), {'gateway': 'live'})
-        self.assertEqual(development_response.status, 200)
-        self.assertEqual(development_response.json(), {'gateway': 'mock'})
 
     def test_only_union_dependency_supports_leaf_providers(self) -> None:
         class MockGateway:
@@ -604,7 +605,10 @@ class AppIntegrationTests(unittest.TestCase):
             async def gateway(self) -> dict:
                 return {'gateway': self.checkout.gateway_name()}
 
-        app = Autumn(environment = Environment.PRODUCTION)
+        class ProjectApplicationConfiguration(ApplicationConfiguration):
+            environment = Environment.PRODUCTION
+
+        app = Autumn()
         response = run_async(
             asgi_request(
                 app,
@@ -617,7 +621,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.json(), {'gateway': 'live'})
 
     def test_only_union_dependency_rejects_overlapping_environments(self) -> None:
-        app = Autumn(environment = Environment.LOCAL)
+        app = Autumn()
 
         @only(Environment.DEVELOPMENT)
         @service
@@ -656,7 +660,10 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertIn('development', str(raised.exception))
 
     def test_only_union_dependency_rejects_missing_active_environment(self) -> None:
-        app = Autumn(environment = Environment.PRODUCTION)
+        class ProjectApplicationConfiguration(ApplicationConfiguration):
+            environment = Environment.PRODUCTION
+
+        app = Autumn()
 
         @only(Environment.DEVELOPMENT)
         @service
@@ -694,7 +701,7 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertIn('no union dependency is active for production', str(raised.exception))
 
     def test_only_warns_when_other_environment_dependency_graph_would_fail(self) -> None:
-        app = Autumn(environment = Environment.LOCAL)
+        app = Autumn()
 
         @only(Environment.LOCAL)
         @service

@@ -23,6 +23,7 @@ class ApplicationConfiguration(Configuration):
     name: str = 'Autumn API'
     version: str = 'v0.1.0'
     description: Optional[str] = None
+    environment: Environment = Environment.LOCAL
 
     host: str = '127.0.0.1'
     port: int = 8000
@@ -66,4 +67,4 @@ class WebUIConfiguration(Configuration):
     enabled: bool = True
     leaves_animation_enabled: bool = True
     default_theme: Theme = Theme.DARK
-    allowed_on: Tuple[Environment, ...] = (Environment.DEVELOPMENT,)
+    allowed_on: Tuple[Environment, ...] = (Environment.LOCAL, Environment.DEVELOPMENT)

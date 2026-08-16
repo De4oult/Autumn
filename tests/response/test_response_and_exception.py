@@ -24,6 +24,14 @@ class SerializableUser:
         self.password_hash: Private[str] = f'hash:{password}'
 
 
+@serializable
+class AutoSerializableUser:
+    id: Public[int]
+    name: Public[str]
+    age: Public[int] = 18
+    password_hash: Private[str] = 'hidden'
+
+
 class RequestStub:
     def __init__(self, accept: str | None, request_id: str | None = None):
         self._accept = accept
@@ -70,6 +78,26 @@ class ResponseAndExceptionTests(unittest.TestCase):
         self.assertIn('"name":"Anton"', response.text)
         self.assertIn('"age":18', response.text)
         self.assertNotIn('password_hash', response.text)
+
+    def test_serializable_generates_init_from_annotations_with_defaults_and_visibility(self) -> None:
+        user = AutoSerializableUser(id = 1, name = 'Anton')
+        response = JSONResponse({'user': user})
+
+        self.assertEqual(user.id, 1)
+        self.assertEqual(user.name, 'Anton')
+        self.assertEqual(user.age, 18)
+        self.assertEqual(user.password_hash, 'hidden')
+        self.assertIn('"id":1', response.text)
+        self.assertIn('"name":"Anton"', response.text)
+        self.assertIn('"age":18', response.text)
+        self.assertNotIn('password_hash', response.text)
+
+    def test_serializable_generated_init_rejects_missing_and_unknown_fields(self) -> None:
+        with self.assertRaises(TypeError):
+            AutoSerializableUser(name = 'Anton')
+
+        with self.assertRaises(TypeError):
+            AutoSerializableUser(id = 1, name = 'Anton', unknown = True)
 
     def test_http_exception_defaults_to_json_response(self) -> None:
         exception = HTTPException(status = 404, details = 'missing')

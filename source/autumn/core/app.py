@@ -47,11 +47,10 @@ class Autumn:
     def __init__(
         self,
         *,
-        environment: Environment = Environment.DEVELOPMENT,
         discover: Optional[str | Sequence[str]] = None,
         root_path: Optional[str | Path] = None
     ):
-        self.environment: Environment = environment
+        self.environment: Environment = Environment.LOCAL
         caller_file = inspect.stack()[1].filename
         self.__entrypoint_path: Optional[Path] = Path(caller_file).resolve() if caller_file else None
         self.__root_path: Optional[Path] = Path(root_path).resolve() if root_path is not None else (
@@ -210,6 +209,15 @@ class Autumn:
 
         if key is not None:
             self.__disabled_provider_reasons[key] = self.__only_error_message(definition, key)
+
+    def __sync_application_environment(self, configuration_classes: Sequence[type[Configuration]]) -> None:
+        for configuration_class in get_registered_configs(configuration_classes):
+            if not issubclass(configuration_class, ApplicationConfiguration):
+                continue
+
+            configuration = configuration_class.build()
+            environment = getattr(configuration, 'environment', Environment.LOCAL)
+            self.environment = environment if isinstance(environment, Environment) else Environment(str(environment))
 
     @staticmethod
     def __normalize_route_path(path: str) -> str:
@@ -414,6 +422,8 @@ class Autumn:
             shutdown_hooks,
             middleware_entries
         ) = dependency_registry.registered_definitions()
+
+        self.__sync_application_environment(configuration_classes)
 
         for definition in (*dependency_functions, *service_classes):
             key = self.__provider_key_for_definition(definition)

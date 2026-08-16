@@ -29,6 +29,8 @@ class SerializableField:
     name: str
     annotation: Any
     public: bool
+    has_default: bool = False
+    default: Any = None
 
 def _unwrap_annotated(annotation: Any) -> tuple[Any, _Visibility | None]:
     current = annotation
@@ -182,7 +184,11 @@ def _collect_class_level_fields(cls: type) -> list[SerializableField]:
         annotations = _safe_get_annotations(base, _build_annotation_context(base))
 
         for name, annotation in annotations.items():
+            if name.startswith('_'):
+                continue
+
             _, visibility = _unwrap_annotated(annotation)
+            has_default = name in base.__dict__
             
             fields.append(
                 SerializableField(
@@ -192,7 +198,9 @@ def _collect_class_level_fields(cls: type) -> list[SerializableField]:
                         True
                         if visibility is None 
                         else visibility.public
-                    )
+                    ),
+                    has_default = has_default,
+                    default     = base.__dict__.get(name)
                 )
             )
 
@@ -262,7 +270,7 @@ def _collect_instance_fields_from_init(cls: type) -> list[SerializableField]:
                     True 
                     if visibility is None 
                     else visibility.public
-                )
+                ),
             )
         )
 
@@ -293,16 +301,53 @@ def get_serializable_fields(cls: type) -> list[SerializableField]:
     return fields
 
 
+def _has_declared_init(cls: type) -> bool:
+    init = cls.__dict__.get('__init__')
+    return init is not None and init is not object.__init__
+
+
+def _install_auto_init(cls: type, fields: list[SerializableField]) -> None:
+    if _has_declared_init(cls):
+        return
+
+    def __init__(self, **kwargs: Any) -> None:
+        unknown = set(kwargs) - {field.name for field in fields}
+
+        if unknown:
+            names = ', '.join(sorted(unknown))
+            raise TypeError(f'Unexpected serializable field(s): {names}')
+
+        for field in fields:
+            if field.name in kwargs:
+                value = kwargs[field.name]
+
+            elif field.has_default:
+                value = field.default
+
+            else:
+                raise TypeError(f'Missing required serializable field: {field.name}')
+
+            setattr(self, field.name, value)
+
+    __init__.__name__ = '__init__'
+    __init__.__qualname__ = f'{cls.__qualname__}.__init__'
+    __init__.__module__ = cls.__module__
+    setattr(cls, '__init__', __init__)
+
+
 def serializable(cls: type[T]) -> type[T]:
+    fields = _merge_fields(
+        _collect_class_level_fields(cls),
+        _collect_instance_fields_from_init(cls)
+    )
+
     setattr(cls, '__autumn_serializable__', True)
     setattr(
         cls,
         '__autumn_serializable_fields__',
-        _merge_fields(
-            _collect_class_level_fields(cls),
-            _collect_instance_fields_from_init(cls)
-        )
+        fields
     )
+    _install_auto_init(cls, fields)
 
     return cls
 
@@ -321,7 +366,7 @@ def serialize_instance(value: Any) -> dict[str, Any]:
     field_map = {field.name: field for field in get_serializable_fields(type(value))}
     payload: dict[str, Any] = {}
 
-    for name, field_value in vars(value).items():
+    for name, field_value in getattr(value, '__dict__', {}).items():
         field = field_map.get(name)
 
         if field is not None:
@@ -399,7 +444,9 @@ def schema_for_annotation(annotation: Any) -> dict[str, Any] | None:
                 field_schema = {}
 
             properties[field.name] = field_schema
-            required.append(field.name)
+
+            if not field.has_default:
+                required.append(field.name)
 
         return {
             'type'       : 'object',

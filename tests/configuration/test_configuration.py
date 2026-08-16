@@ -98,6 +98,11 @@ class ConfigurationTests(unittest.TestCase):
             (Environment.DEVELOPMENT, Environment.PRODUCTION)
         )
 
+    def test_application_configuration_defaults_to_local_environment(self) -> None:
+        configuration = ApplicationConfiguration.build()
+
+        self.assertEqual(configuration.environment, Environment.LOCAL)
+
     def test_configuration_casts_theme_enum(self) -> None:
         class TestConfiguration(Configuration):
             default_theme: Maple['default.theme', Theme]

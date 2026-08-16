@@ -1,6 +1,7 @@
 import unittest
 
 from autumn.core.app import Autumn
+from autumn.core.configuration.builtin import ApplicationConfiguration
 from autumn.core.environment import Environment
 from autumn.core.routing.decorators import REST, get
 from tests.support import asgi_request, reset_framework_state, run_async
@@ -11,7 +12,10 @@ class ErrorDisclosureTests(unittest.TestCase):
         reset_framework_state()
 
     def test_production_does_not_disclose_unhandled_exception_details(self) -> None:
-        app = Autumn(environment = Environment.PRODUCTION)
+        class ProjectApplicationConfiguration(ApplicationConfiguration):
+            environment = Environment.PRODUCTION
+
+        app = Autumn()
 
         @REST()
         class FailureController:
