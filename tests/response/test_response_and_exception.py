@@ -126,7 +126,8 @@ class ResponseAndExceptionTests(unittest.TestCase):
 
         self.assertIsInstance(response, JSONResponse)
         self.assertEqual(response.status, 400)
-        self.assertIn('"status":400', response.text)
+        self.assertIn('"code":"BAD_REQUEST"', response.text)
+        self.assertIn('"timestamp"', response.text)
 
     def test_http_exception_adds_request_id_and_meta_to_json_response(self) -> None:
         exception = HTTPException(
@@ -142,6 +143,31 @@ class ResponseAndExceptionTests(unittest.TestCase):
 
         self.assertEqual(payload['request_id'], 'req-123')
         self.assertEqual(payload['meta'], {'resource': 'leaf'})
+        self.assertEqual(payload['code'], 'NOT_FOUND')
+
+    def test_http_exception_supports_custom_code_and_fields(self) -> None:
+        exception = HTTPException(
+            status = 422,
+            code = 'VALIDATION_ERROR',
+            details = 'Request validation failed',
+            fields = [
+                {
+                    'source': 'body',
+                    'field': 'region',
+                    'input': '',
+                    'error': 'Region must be an ISO 3166-1 alpha-2 country code'
+                }
+            ],
+            request_id = 'req-789'
+        )
+
+        payload = json.loads(exception.to_response(RequestStub('application/json')).text)
+
+        self.assertEqual(payload['code'], 'VALIDATION_ERROR')
+        self.assertEqual(payload['fields'][0]['source'], 'body')
+        self.assertEqual(payload['fields'][0]['field'], 'region')
+        self.assertEqual(payload['request_id'], 'req-789')
+        self.assertIn('timestamp', payload)
 
     def test_http_exception_supports_custom_body(self) -> None:
         exception = HTTPException(

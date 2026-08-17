@@ -19,7 +19,7 @@ from autumn.core.security.registry import get_policy
 from autumn.core.security.requirements import SecurityRequirements, requirements_for
 from autumn.core.i18n import I18n, Locale, load_locale_messages, select_locale
 
-from typing import Any, Callable, Optional, Sequence, get_type_hints
+from typing import Any, Callable, ClassVar, Optional, Sequence, get_origin, get_type_hints
 from pathlib import Path
 from uuid import uuid4
 from colorama import Fore
@@ -33,6 +33,7 @@ import inspect
 import types
 import time
 import sys
+import traceback
 
 
 @dataclass(frozen = True)
@@ -781,6 +782,24 @@ class Autumn:
 
         return dependencies
 
+    def __attribute_dependency_keys(self, cls: type) -> list[Any]:
+        hints = self.__safe_type_hints(cls)
+        dependencies: list[Any] = []
+
+        for name, annotation in hints.items():
+            if name.startswith('_'):
+                continue
+
+            if get_origin(annotation) is ClassVar:
+                continue
+
+            if name in cls.__dict__:
+                continue
+
+            dependencies.append(annotation)
+
+        return dependencies
+
     def __provider_leaf_map(self) -> dict[Any, Callable[..., Any]]:
         leaf_map: dict[Any, Callable[..., Any]] = {}
 
@@ -931,6 +950,7 @@ class Autumn:
                 skip_self = True,
                 provider_keys = provider_keys
             )
+            dependencies.extend(self.__attribute_dependency_keys(key))
 
         elif key in leaf_map:
             callable = leaf_map[key]
@@ -1161,6 +1181,7 @@ class Autumn:
                 provider_keys = provider_keys,
                 can_resolve_dependency = lambda dependency: self.__dependency_key_available_for_environment(dependency, provider_keys)
             )
+            dependencies.extend(self.__attribute_dependency_keys(definition))
 
         elif key in leaf_map:
             callable = leaf_map[key]
@@ -1318,7 +1339,16 @@ class Autumn:
                 if required:
                     raise HTTPException(
                         status  = 400,
-                        details = f'Missing query parameter: \'{name}\''
+                        code    = 'VALIDATION_ERROR',
+                        details = 'Request validation failed',
+                        fields  = [
+                            {
+                                'source': 'query',
+                                'field': str(name),
+                                'input': None,
+                                'error': 'Field required'
+                            }
+                        ]
                     )
 
                 if default is not None:
@@ -1334,7 +1364,16 @@ class Autumn:
             except Exception:
                 raise HTTPException(
                     status = 400,
-                    details = f'Invalid value for \'{name}\''
+                    code    = 'VALIDATION_ERROR',
+                    details = 'Request validation failed',
+                    fields  = [
+                        {
+                            'source': 'query',
+                            'field': str(name),
+                            'input': raw_value,
+                            'error': f'Invalid value for {name}'
+                        }
+                    ]
                 )
 
         request.query = parsed
@@ -2079,8 +2118,7 @@ class Autumn:
                 response = error.to_response(request)
 
             except Exception as error:
-                if self.environment != Environment.PRODUCTION:
-                    print(error)
+                traceback.print_exception(type(error), error, error.__traceback__)
                 response = HTTPException(
                     status = 500,
                     details = self.__internal_error_details(error)
@@ -2093,9 +2131,20 @@ class Autumn:
 
         try:
             if match is None:
+                allowed_methods = self.router.allowed_methods(scope['path'])
+
+                if allowed_methods:
+                    raise HTTPException(
+                        status = 405,
+                        details = f"Method {scope['method'].upper()} is not allowed for {scope.get('path')}",
+                        headers = {
+                            'Allow': ', '.join(allowed_methods)
+                        }
+                    )
+
                 raise HTTPException(
                     status = 404, 
-                    details = f'Route {scope.get('path')} not found'
+                    details = f"Route {scope.get('path')} not found"
                 )
         
             parameters = match.parameters
@@ -2156,8 +2205,7 @@ class Autumn:
             response = error.to_response(request)
 
         except Exception as error:
-            if self.environment != Environment.PRODUCTION:
-                print(error)
+            traceback.print_exception(type(error), error, error.__traceback__)
 
             response = HTTPException(
                 status = 500, 

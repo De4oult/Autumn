@@ -212,6 +212,18 @@ class Router:
                 )
             
         return None
+
+    def allowed_methods(self, path: str) -> tuple[str, ...]:
+        allowed: set[str] = set()
+
+        for route in self.routes:
+            if route.method == 'WS':
+                continue
+
+            if route.match(route.method, path) is not None:
+                allowed.add(route.method)
+
+        return tuple(sorted(allowed))
     
     def match_websocket(self, path: str) -> Optional[RouteMatch]:
         return self.match('WS', path)

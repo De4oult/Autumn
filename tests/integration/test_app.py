@@ -172,6 +172,109 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(default_response.json()['page'], 10)
         self.assertEqual(default_response.json()['request_page'], 10)
 
+    def test_query_decorator_validation_error_uses_field_format(self) -> None:
+        app = Autumn()
+
+        @REST(prefix = '/users')
+        class UserController:
+            @get('/')
+            @query.int('page', required = True)
+            async def search(self, page: int) -> dict:
+                return {'page': page}
+
+        response = run_async(
+            asgi_request(
+                app,
+                method = 'GET',
+                path = '/users'
+            )
+        )
+
+        payload = response.json()
+
+        self.assertEqual(response.status, 400)
+        self.assertEqual(payload['code'], 'VALIDATION_ERROR')
+        self.assertEqual(payload['fields'][0]['source'], 'query')
+        self.assertEqual(payload['fields'][0]['field'], 'page')
+        self.assertEqual(payload['fields'][0]['error'], 'Field required')
+        self.assertIn('timestamp', payload)
+
+    def test_request_body_validation_error_uses_field_format(self) -> None:
+        app = Autumn()
+
+        @REST(prefix = '/users')
+        class UserController:
+            @post('/')
+            async def create(self, user: UserSchema) -> dict:
+                return {'name': user.name}
+
+        response = run_async(
+            asgi_request(
+                app,
+                method = 'POST',
+                path = '/users',
+                headers = {'content-type': 'application/json'},
+                body = b'{"name":"Autumn"}'
+            )
+        )
+
+        payload = response.json()
+
+        self.assertEqual(response.status, 422)
+        self.assertEqual(payload['code'], 'VALIDATION_ERROR')
+        self.assertEqual(payload['details'], 'Request validation failed')
+        self.assertEqual(payload['fields'][0]['source'], 'body')
+        self.assertEqual(payload['fields'][0]['field'], 'age')
+        self.assertIn('timestamp', payload)
+
+    def test_method_not_allowed_when_path_exists_for_other_method(self) -> None:
+        app = Autumn()
+
+        @REST(prefix = '/test')
+        class TestController:
+            @get('/')
+            async def index(self) -> dict:
+                return {'ok': True}
+
+        response = run_async(
+            asgi_request(
+                app,
+                method = 'POST',
+                path = '/test'
+            )
+        )
+
+        self.assertEqual(response.status, 405)
+        self.assertEqual(response.headers['Allow'], 'GET')
+        self.assertEqual(response.json()['code'], 'METHOD_NOT_ALLOWED')
+
+    def test_controller_supports_attribute_injection(self) -> None:
+        app = Autumn()
+
+        @service
+        class GreetingService:
+            def message(self) -> str:
+                return 'Hello from attribute injection'
+
+        @REST(prefix = '/attribute')
+        class AttributeController:
+            greetings: GreetingService
+
+            @get('/')
+            async def index(self) -> dict:
+                return {'message': self.greetings.message()}
+
+        response = run_async(
+            asgi_request(
+                app,
+                method = 'GET',
+                path = '/attribute'
+            )
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.json()['message'], 'Hello from attribute injection')
+
     def test_app_errors_follow_accept_header(self) -> None:
         app = Autumn()
 
@@ -274,7 +377,7 @@ class AppIntegrationTests(unittest.TestCase):
 
         self.assertEqual(response.status, 403)
         self.assertEqual(response.headers['content-type'], 'application/json')
-        self.assertEqual(response.json()['status'], 403)
+        self.assertEqual(response.json()['code'], 'FORBIDDEN')
 
     def test_custom_cors_configuration_allows_preflight(self) -> None:
         app = Autumn()

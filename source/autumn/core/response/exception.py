@@ -1,4 +1,6 @@
 from autumn.core.response.response import HTMLResponse, JSONResponse, Response
+from datetime import datetime, timezone
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Optional
 
@@ -48,38 +50,35 @@ class HTTPException(Exception):
         self,
         status: int = 500,
         title: str | None = None,
+        code: str | None = None,
         details: str = None,
         headers: Optional[dict[str, str]] = None,
         *,
         request_id: str | None = None,
+        fields: Optional[list[dict[str, Any]]] = None,
         meta: Optional[dict[str, Any]] = None,
         body: Optional[dict[str, Any]] = None
     ):
-        titles: dict[int, str] = {
-            400 : 'The leaf fell off before the wind realized',
-            401 : 'The smell of a campfire, but the door is still locked',
-            403 : 'The path is blocked, but you knew it in advance',
-            404 : 'There is no house or trace through the fog',
-            408 : 'The answer did not come with the last light',
-            413 : 'The load was heavier than the branch could bear',
-            418 : 'I\'m Autumn, not Spring',
-            429 : 'Autumn is not in a hurry, and you don\'t have to',
-
-            500 : 'The forest did not respond — even the echo was silent',
-            502 : 'The winds brought fragments of other people\'s words',
-            503 : 'The house is closed until spring',
-            504 : 'The expectation disappeared into the damp air'
-        }
-
         self.status = status
-        self.title = title if title else titles.get(self.status, 'Something')
+        self.code = code or title or self.__default_code(status)
+        self.title = self.code
         self.details = details or ''
         self.headers = headers or {}
         self.request_id = request_id
+        self.fields = fields or []
         self.meta = meta or {}
         self.body = body
+        self.timestamp = datetime.now(timezone.utc).isoformat()
         
         self.response = self.to_response()
+
+    @staticmethod
+    def __default_code(status: int) -> str:
+        try:
+            return HTTPStatus(status).phrase.upper().replace(' ', '_').replace('-', '_')
+
+        except ValueError:
+            return 'ERROR'
 
     def __headers(self, request: Optional[Any] = None) -> dict[str, str]:
         headers = dict(self.headers)
@@ -95,10 +94,13 @@ class HTTPException(Exception):
             payload = dict(self.body)
         else:
             payload = {
-                'status'  : self.status,
-                'title'   : self.title,
-                'details' : self.details
+                'code'      : self.code,
+                'details'   : self.details,
+                'timestamp' : self.timestamp
             }
+
+            if self.fields:
+                payload['fields'] = self.fields
 
         request_id = self.request_id or getattr(request, 'request_id', None)
 

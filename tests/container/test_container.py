@@ -59,6 +59,9 @@ class ContainerTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.status, 422)
+        self.assertEqual(raised.exception.code, 'VALIDATION_ERROR')
+        self.assertEqual(raised.exception.fields[0]['source'], 'body')
+        self.assertEqual(raised.exception.fields[0]['field'], 'age')
 
     def test_container_resolves_registered_dependencies(self) -> None:
         @leaf

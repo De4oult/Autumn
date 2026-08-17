@@ -13,7 +13,7 @@ from autumn.core.i18n import I18n, Locale
 
 from dataclasses import dataclass, field
 from types import UnionType
-from typing import Any, Callable, Dict, Optional, Type, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Any, Callable, ClassVar, Dict, Optional, Type, TypeVar, Union, get_args, get_origin, get_type_hints
 from pydantic import TypeAdapter, ValidationError
 
 import inspect
@@ -63,6 +63,11 @@ class CallMetadata:
 class InjectMetadata:
     dependency_parameters: tuple[DependencyParameter, ...]
 
+
+@dataclass(frozen = True)
+class AttributeInjectMetadata:
+    dependency_parameters: tuple[DependencyParameter, ...]
+
 class BuiltinProvider:
     def __init__(self, key: Type[Any], scope: Scope):
         self.key = key
@@ -85,6 +90,7 @@ class Container:
         
         self.__call_metadata_cache: Dict[tuple[Any, bool], CallMetadata] = {}
         self.__inject_metadata_cache: Dict[tuple[Any, bool], InjectMetadata] = {}
+        self.__attribute_inject_metadata_cache: Dict[Any, AttributeInjectMetadata] = {}
         self.__type_adapter_cache: Dict[Any, TypeAdapter] = {}
 
         self.__providers[Request] = Provider(
@@ -134,6 +140,7 @@ class Container:
     def __invalidate_callable_caches(self) -> None:
         self.__call_metadata_cache.clear()
         self.__inject_metadata_cache.clear()
+        self.__attribute_inject_metadata_cache.clear()
 
     def __get_call_metadata(self, func: Callable[..., Any], *, skip_self: bool = False) -> CallMetadata:
         cache_key = (self.__callable_cache_key(func), skip_self)
@@ -229,6 +236,44 @@ class Container:
         self.__inject_metadata_cache[cache_key] = metadata
         return metadata
 
+    def __get_attribute_inject_metadata(self, cls: type) -> AttributeInjectMetadata:
+        cache_key = cls
+
+        if cache_key in self.__attribute_inject_metadata_cache:
+            return self.__attribute_inject_metadata_cache[cache_key]
+
+        try:
+            hints = get_type_hints(cls)
+
+        except Exception:
+            hints = getattr(cls, '__annotations__', {}) or {}
+
+        dependencies: list[DependencyParameter] = []
+
+        for name, dependency_type in hints.items():
+            if name.startswith('_'):
+                continue
+
+            if get_origin(dependency_type) is ClassVar:
+                continue
+
+            if name in cls.__dict__:
+                continue
+
+            dependencies.append(
+                DependencyParameter(
+                    name = name,
+                    dependency_type = dependency_type
+                )
+            )
+
+        metadata = AttributeInjectMetadata(
+            dependency_parameters = tuple(dependencies)
+        )
+
+        self.__attribute_inject_metadata_cache[cache_key] = metadata
+        return metadata
+
     def __get_type_adapter(self, annotation: Any) -> TypeAdapter:
         try:
             if annotation in self.__type_adapter_cache:
@@ -242,6 +287,38 @@ class Container:
 
         except TypeError:
             return TypeAdapter(annotation)
+
+    @staticmethod
+    def __format_validation_field_error(source: str, error: dict[str, Any]) -> dict[str, Any]:
+        location = error.get('loc') or ()
+
+        if not isinstance(location, (tuple, list)):
+            location = (location,)
+
+        field = '.'.join(str(part) for part in location if part not in ('body', '__root__')) or source
+        message = str(error.get('msg') or 'Invalid value')
+
+        if message.startswith('Value error, '):
+            message = message[len('Value error, '):]
+
+        context = error.get('ctx') or {}
+
+        if 'error' in context:
+            message = str(context['error'])
+
+        return {
+            'source': source,
+            'field': field,
+            'input': error.get('input'),
+            'error': message
+        }
+
+    @classmethod
+    def __format_validation_fields(cls, source: str, error: ValidationError) -> list[dict[str, Any]]:
+        return [
+            cls.__format_validation_field_error(source, item)
+            for item in error.errors(include_url = False)
+        ]
 
     # Registration
     def register_dependency_function(self, func: Callable[..., Any]):
@@ -370,7 +447,9 @@ class Container:
         except ValidationError as error:
             raise HTTPException(
                 status  = 422,
-                details = str(error)
+                code    = 'VALIDATION_ERROR',
+                details = 'Request validation failed',
+                fields  = self.__format_validation_fields('body', error)
             ) from error
 
         except Exception as error:
@@ -431,7 +510,9 @@ class Container:
             init = cls.__init__
             kwargs = await self.__inject_kwargs(init, context, skip_self = True)
 
-            return cls(**kwargs)
+            instance = cls(**kwargs)
+            await self.__inject_attributes(instance, context)
+            return instance
         
         raise DependencyInjectionError(f'Unknown provider kind: {provider.kind}')
     
@@ -449,6 +530,25 @@ class Container:
                 ) from error
 
         return kwargs
+
+    async def __inject_attributes(self, instance: Any, context: Optional[ExecutionContext]) -> None:
+        metadata = self.__get_attribute_inject_metadata(type(instance))
+
+        for dependency in metadata.dependency_parameters:
+            if hasattr(instance, dependency.name):
+                continue
+
+            try:
+                setattr(
+                    instance,
+                    dependency.name,
+                    await self.resolve(dependency.dependency_type, context)
+                )
+
+            except (DependencyInjectionError, DependencyProviderError) as error:
+                raise DependencyInjectionError(
+                    f'Cannot resolve attribute \'{dependency.name}\' ({dependency.dependency_type}) for {type(instance)}'
+                ) from error
 
     async def resolve_call_kwargs(
         self,
